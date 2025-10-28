@@ -16,6 +16,14 @@ class TorchComparator(Comparator):
                 # Try to convert b to torch tensor
                 if hasattr(b, '__array__'):  # NumPy array or similar
                     b = torch.from_numpy(b) if hasattr(b, 'dtype') else torch.tensor(b)
+
+            # Handle cross-device comparison (e.g., cuda:0 vs cuda:1, or cuda vs cpu)
+            if isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor):
+                if a.device != b.device:
+                    # Move both tensors to CPU for comparison
+                    a = a.cpu()
+                    b = b.cpu()
+
             return torch.allclose(a, b, atol=atol, rtol=rtol)
         except ImportError:
             raise ImportError("PyTorch is not installed. Cannot compare torch.Tensor")
