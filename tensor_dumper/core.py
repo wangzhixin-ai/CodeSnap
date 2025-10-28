@@ -510,20 +510,77 @@ class TensorDumper:
         # Serialize and save (silently, without logging)
         serializer.save(obj, filepath)
 
-    def compare(self, a: Any, b: Any, atol: float = 1e-8, rtol: float = 1e-5, **kwargs) -> bool:
+    def _load_from_file(self, filepath):
         """
-        Compare two objects.
+        Load an object from a file based on its extension.
+
+        Uses the registry system to find the appropriate serializer.
+
+        Supports:
+        - .pt: PyTorch tensors
+        - .npy: NumPy arrays
+        - .pkl: Pickle files
 
         Args:
-            a: First object
-            b: Second object
+            filepath: Path to the file (string or Path object)
+
+        Returns:
+            Loaded object
+
+        Raises:
+            ValueError: If file extension is not supported
+            FileNotFoundError: If file doesn't exist
+        """
+        from pathlib import Path
+
+        filepath = Path(filepath)
+
+        if not filepath.exists():
+            raise FileNotFoundError(f"File not found: {filepath}")
+
+        # Get serializer by file extension using registry
+        ext = filepath.suffix
+        serializer = self.registry.get_serializer_by_extension(ext)
+
+        # Load using the serializer
+        return serializer.load(filepath)
+
+    def compare(self, a: Any, b: Any, atol: float = 1e-8, rtol: float = 1e-5, **kwargs) -> bool:
+        """
+        Compare two objects or files.
+
+        Supports:
+        - Direct object comparison (tensors, arrays, etc.)
+        - File path comparison (.pt, .npy, .pkl files)
+        - Mixed: object vs file path
+
+        Args:
+            a: First object or file path (str/Path)
+            b: Second object or file path (str/Path)
             atol: Absolute tolerance
             rtol: Relative tolerance
             **kwargs: Additional comparison parameters
 
         Returns:
             True if objects are equal within tolerance
+
+        Examples:
+            >>> # Compare objects directly
+            >>> tensor_dumper.compare(tensor1, tensor2)
+
+            >>> # Compare files
+            >>> tensor_dumper.compare("output_rank0.pt", "output_rank1.pt")
+
+            >>> # Compare file with object
+            >>> tensor_dumper.compare("saved.pt", my_tensor)
         """
+        # Load from file if input is a string or Path
+        if isinstance(a, (str, Path)):
+            a = self._load_from_file(a)
+
+        if isinstance(b, (str, Path)):
+            b = self._load_from_file(b)
+
         # Get comparator for these object types
         comparator = self.registry.get_comparator(a, b)
         return comparator.compare(a, b, atol=atol, rtol=rtol, **kwargs)

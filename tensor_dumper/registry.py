@@ -40,6 +40,7 @@ class SerializerRegistry:
     def __init__(self):
         self._serializers: Dict[str, Serializer] = {}
         self._comparators: Dict[str, Comparator] = {}
+        self._extension_serializers: Dict[str, Serializer] = {}  # Extension -> Serializer mapping
         self._register_defaults()
 
     def _register_defaults(self):
@@ -55,10 +56,20 @@ class SerializerRegistry:
             DefaultComparator
         )
 
-        # Register serializers
-        self.register_serializer('torch.Tensor', TorchSerializer())
-        self.register_serializer('numpy.ndarray', NumpySerializer())
-        self.register_serializer('default', PickleSerializer())
+        # Create serializer instances
+        torch_serializer = TorchSerializer()
+        numpy_serializer = NumpySerializer()
+        pickle_serializer = PickleSerializer()
+
+        # Register serializers by type
+        self.register_serializer('torch.Tensor', torch_serializer)
+        self.register_serializer('numpy.ndarray', numpy_serializer)
+        self.register_serializer('default', pickle_serializer)
+
+        # Register serializers by extension
+        self.register_serializer_for_extension('.pt', torch_serializer)
+        self.register_serializer_for_extension('.npy', numpy_serializer)
+        self.register_serializer_for_extension('.pkl', pickle_serializer)
 
         # Register comparators
         self.register_comparator('torch.Tensor', TorchComparator())
@@ -68,6 +79,17 @@ class SerializerRegistry:
     def register_serializer(self, type_name: str, serializer: Serializer):
         """Register a serializer for a type."""
         self._serializers[type_name] = serializer
+
+    def register_serializer_for_extension(self, extension: str, serializer: Serializer):
+        """Register a serializer for a file extension.
+
+        Args:
+            extension: File extension (e.g., '.pt', '.npy')
+            serializer: Serializer instance
+        """
+        if not extension.startswith('.'):
+            extension = '.' + extension
+        self._extension_serializers[extension.lower()] = serializer
 
     def register_comparator(self, type_name: str, comparator: Comparator):
         """Register a comparator for a type."""
@@ -89,6 +111,30 @@ class SerializerRegistry:
 
         # Return default
         return self._serializers['default']
+
+    def get_serializer_by_extension(self, extension: str) -> Serializer:
+        """Get serializer for a file extension.
+
+        Args:
+            extension: File extension (e.g., '.pt', '.npy')
+
+        Returns:
+            Serializer instance
+
+        Raises:
+            ValueError: If extension is not registered
+        """
+        if not extension.startswith('.'):
+            extension = '.' + extension
+
+        ext_lower = extension.lower()
+        if ext_lower in self._extension_serializers:
+            return self._extension_serializers[ext_lower]
+
+        raise ValueError(
+            f"Unsupported file extension: {extension}. "
+            f"Supported: {', '.join(self._extension_serializers.keys())}"
+        )
 
     def get_comparator(self, a: Any, b: Any) -> Comparator:
         """Get comparator for two objects."""

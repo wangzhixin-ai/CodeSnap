@@ -25,12 +25,14 @@ When debugging ML/DL models, you often need to:
 ### Core Features
 - 🎯 **Simple API**: Just `init()`, `dump()`, and `compare()`
 - 🔧 **Type-agnostic**: Supports PyTorch tensors, NumPy arrays, and any Python object
+- 🔄 **Cross-format comparison**: Compare `.pt` vs `.npy` files seamlessly
 - 📁 **Auto-organized**: Timestamped directories for each run
 - ⚡ **Smart updates**: Only saves metadata when it changes
 - 🌐 **Distributed training support**: Works seamlessly with multi-GPU/multi-node training
   - Single shared folder for all ranks
   - Only rank 0 saves metadata
   - Automatic rank detection and synchronization
+- 🏗️ **Extensible**: Registry-based architecture for custom types
 
 ### Reproducibility Features
 - 🚀 **Command tracking**: Saves the exact command used to start your program
@@ -44,8 +46,7 @@ When debugging ML/DL models, you often need to:
 
 ### Advanced Features
 - 🎛️ **Enable/Disable**: Turn dumping on/off without code changes
-- 🔄 **Smart comparison**: Tolerance-based comparison for numerical data
-- 🏗️ **Extensible**: Registry-based architecture for custom types
+- 🔄 **Smart comparison**: Tolerance-based comparison for numerical data with cross-format support
 - 📊 **Metadata separation**: Different files for packages, git info, and runtime info
 
 ## Installation
@@ -264,14 +265,48 @@ Dump an object to disk.
 ```python
 tensor_dumper.compare(a, b, atol=1e-8, rtol=1e-5) -> bool
 ```
-Compare two objects with tolerance.
+Compare two objects or files with tolerance. **Supports cross-format comparison!**
 
 **Parameters:**
-- `a`, `b`: Objects to compare
+- `a`, `b`: Objects to compare OR file paths (str/Path). Supports:
+  - Direct objects (tensors, arrays, etc.)
+  - File paths to `.pt`, `.npy`, or `.pkl` files
+  - Mixed: object vs file path
+  - **Cross-format: `.pt` vs `.npy` files**
 - `atol` (float): Absolute tolerance (default: 1e-8)
 - `rtol` (float): Relative tolerance (default: 1e-5)
 
 **Comparison formula:** `|a - b| ≤ atol + rtol × |b|`
+
+**Examples:**
+
+```python
+# Compare objects directly
+tensor_dumper.compare(tensor1, tensor2)
+
+# Compare files (no need to load manually!)
+tensor_dumper.compare("experiments/20251028_143041/loss_rank0.pt",
+                      "experiments/20251028_143041/loss_rank1.pt")
+
+# Cross-format comparison (NEW!)
+# Compare PyTorch tensor file with NumPy array file
+tensor_dumper.compare("output.pt", "output.npy")
+
+# Compare NumPy array with PyTorch tensor
+import torch
+import numpy as np
+my_tensor = torch.randn(10, 10)
+my_array = np.random.randn(10, 10)
+tensor_dumper.compare(my_tensor, my_array)
+
+# Compare file with in-memory object
+tensor_dumper.compare("saved_tensor.pt", my_array)  # Works even if formats differ!
+```
+
+**How cross-format comparison works:**
+- PyTorch tensors are automatically converted to NumPy when comparing with NumPy arrays
+- NumPy arrays are automatically converted to PyTorch when comparing with PyTorch tensors
+- This allows seamless comparison across different frameworks
 
 ### Control Functions
 
