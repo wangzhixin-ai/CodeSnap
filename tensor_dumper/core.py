@@ -23,6 +23,32 @@ from .registry import SerializerRegistry
 from .metadata import collect_metadata
 
 
+def _get_rank_info():
+    """
+    Get distributed training rank information.
+
+    Returns:
+        tuple: (rank, world_size, is_distributed)
+    """
+    # Try torch.distributed first
+    try:
+        import torch.distributed as dist
+        if dist.is_available() and dist.is_initialized():
+            return dist.get_rank(), dist.get_world_size(), True
+    except (ImportError, RuntimeError):
+        pass
+
+    # Try environment variables (common in distributed training)
+    rank = int(os.environ.get('RANK', os.environ.get('LOCAL_RANK', -1)))
+    world_size = int(os.environ.get('WORLD_SIZE', -1))
+
+    if rank >= 0 and world_size > 0:
+        return rank, world_size, True
+
+    # Not in distributed mode
+    return 0, 1, False
+
+
 class TensorDumper:
     """Main dumper class that handles initialization and dumping."""
 
@@ -32,38 +58,132 @@ class TensorDumper:
         self.registry = SerializerRegistry()
         self.counter = 0
         self.last_metadata = None  # Cache last metadata to detect changes
+        self.rank = 0
+        self.world_size = 1
+        self.is_distributed = False
 
     def init(self, folder_name: str):
-        """Initialize the dumper with output folder."""
-        # Create base folder
+        """Initialize the dumper with output folder.
+
+        In distributed training, only rank 0 will create the folder and save metadata.
+        Other ranks will use the same folder path.
+
+        Args:
+            folder_name: Base directory for dumps
+        """
+        # Get distributed training info
+        self.rank, self.world_size, self.is_distributed = _get_rank_info()
+
+        # Create base folder (all ranks can do this, it's idempotent)
         base_folder = Path(folder_name)
         base_folder.mkdir(parents=True, exist_ok=True)
 
-        # Create timestamped subfolder (Shanghai timezone)
-        if ZoneInfo is not None:
-            # Python 3.9+
-            shanghai_tz = ZoneInfo('Asia/Shanghai')
-            timestamp = datetime.now(shanghai_tz).strftime('%Y%m%d_%H%M%S')
-        elif pytz is not None:
-            # Python < 3.9 with pytz
-            shanghai_tz = pytz.timezone('Asia/Shanghai')
-            timestamp = datetime.now(shanghai_tz).strftime('%Y%m%d_%H%M%S')
+        # Generate timestamp (only rank 0 creates it, others will receive it)
+        if self.rank == 0:
+            # Create timestamped subfolder (Shanghai timezone)
+            if ZoneInfo is not None:
+                # Python 3.9+
+                shanghai_tz = ZoneInfo('Asia/Shanghai')
+                timestamp = datetime.now(shanghai_tz).strftime('%Y%m%d_%H%M%S')
+            elif pytz is not None:
+                # Python < 3.9 with pytz
+                shanghai_tz = pytz.timezone('Asia/Shanghai')
+                timestamp = datetime.now(shanghai_tz).strftime('%Y%m%d_%H%M%S')
+            else:
+                # Fallback: use local time
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         else:
-            # Fallback: use local time
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            timestamp = None
+
+        # Synchronize timestamp across all ranks
+        if self.is_distributed:
+            timestamp = self._broadcast_timestamp(timestamp)
 
         self.folder = base_folder / timestamp
-        self.folder.mkdir(parents=True, exist_ok=True)
 
-        self.counter = 0
+        # Only rank 0 creates the folder and saves metadata
+        if self.rank == 0:
+            self.folder.mkdir(parents=True, exist_ok=True)
+            self.counter = 0
 
-        # Save runtime information
-        self._save_runtime_info()
+            # Save runtime information
+            self._save_runtime_info()
 
-        # Collect and save initial metadata (split into separate files)
-        self._update_metadata()
+            # Collect and save initial metadata (split into separate files)
+            self._update_metadata()
 
-        print(f"TensorDumper initialized. Output folder: {self.folder}")
+            print(f"[Rank {self.rank}] TensorDumper initialized. Output folder: {self.folder}")
+        else:
+            # Non-rank0 processes wait for rank0 to finish initialization
+            if self.is_distributed:
+                self._barrier()
+
+            self.counter = 0
+            print(f"[Rank {self.rank}] TensorDumper initialized. Using folder: {self.folder}")
+
+    def _broadcast_timestamp(self, timestamp: Optional[str]) -> str:
+        """
+        Broadcast timestamp from rank 0 to all other ranks.
+
+        Args:
+            timestamp: Timestamp string (only valid on rank 0)
+
+        Returns:
+            Broadcasted timestamp string
+        """
+        try:
+            import torch
+            import torch.distributed as dist
+
+            if dist.is_available() and dist.is_initialized():
+                # Broadcast timestamp length first
+                if self.rank == 0:
+                    ts_bytes = timestamp.encode('utf-8')
+                    length = torch.tensor(len(ts_bytes), dtype=torch.long)
+                else:
+                    length = torch.tensor(0, dtype=torch.long)
+
+                dist.broadcast(length, src=0)
+
+                # Broadcast timestamp
+                if self.rank == 0:
+                    ts_tensor = torch.tensor(list(ts_bytes), dtype=torch.uint8)
+                else:
+                    ts_tensor = torch.zeros(length.item(), dtype=torch.uint8)
+
+                dist.broadcast(ts_tensor, src=0)
+
+                timestamp = bytes(ts_tensor.tolist()).decode('utf-8')
+                return timestamp
+        except (ImportError, RuntimeError):
+            pass
+
+        # Fallback: if broadcast fails, use a simple timestamp
+        # This may cause issues in distributed training, but won't crash
+        if timestamp is None:
+            import time
+            time.sleep(0.1 * self.rank)  # Small delay to avoid race conditions
+            if ZoneInfo is not None:
+                shanghai_tz = ZoneInfo('Asia/Shanghai')
+                timestamp = datetime.now(shanghai_tz).strftime('%Y%m%d_%H%M%S')
+            elif pytz is not None:
+                shanghai_tz = pytz.timezone('Asia/Shanghai')
+                timestamp = datetime.now(shanghai_tz).strftime('%Y%m%d_%H%M%S')
+            else:
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+        return timestamp
+
+    def _barrier(self):
+        """Synchronization barrier for distributed training."""
+        try:
+            import torch.distributed as dist
+            if dist.is_available() and dist.is_initialized():
+                dist.barrier()
+        except (ImportError, RuntimeError):
+            # If barrier fails, just continue (may cause race conditions)
+            import time
+            time.sleep(0.5)  # Small delay to reduce race conditions
 
     def _save_runtime_info(self):
         """Save runtime information (command, environment variables)."""
@@ -98,10 +218,16 @@ class TensorDumper:
     def _update_metadata(self, force: bool = False):
         """Update metadata if changed.
 
+        In distributed training, only rank 0 updates metadata.
+
         Args:
             force: If True, update metadata even if unchanged
         """
         if self.folder is None:
+            return
+
+        # Only rank 0 updates metadata
+        if self.rank != 0:
             return
 
         packages_path = self.folder / "packages.json"
@@ -281,11 +407,17 @@ class TensorDumper:
         return True
 
     def update_metadata(self):
-        """Manually update metadata (check for changes and save if different)."""
-        self._update_metadata()
-        print(f"Metadata updated:")
-        print(f"  - {self.folder / 'packages.json'}")
-        print(f"  - {self.folder / 'git_info.json'}")
+        """Manually update metadata (check for changes and save if different).
+
+        In distributed training, only rank 0 updates metadata.
+        """
+        if self.rank == 0:
+            self._update_metadata()
+            print(f"[Rank {self.rank}] Metadata updated:")
+            print(f"  - {self.folder / 'packages.json'}")
+            print(f"  - {self.folder / 'git_info.json'}")
+        else:
+            print(f"[Rank {self.rank}] Skipping metadata update (only rank 0 updates metadata)")
 
     def enable(self):
         """Enable dumping."""
@@ -298,6 +430,11 @@ class TensorDumper:
     def dump(self, obj: Any = None, name: Optional[str] = None, update_metadata: bool = True):
         """
         Dump an object to disk.
+
+        In distributed training:
+        - All ranks can dump data
+        - File names will include rank information (e.g., "layer1_output_rank0.pt")
+        - Only rank 0 updates metadata
 
         Args:
             obj: Object to dump (torch.Tensor, numpy.ndarray, or any Python object)
@@ -316,10 +453,15 @@ class TensorDumper:
         # Generate filename
         if name is None:
             name = f"dump_{self.counter:04d}"
+
+        # Add rank suffix in distributed mode
+        if self.is_distributed and self.world_size > 1:
+            name = f"{name}_rank{self.rank}"
+
         self.counter += 1
 
-        # Update metadata if there are changes
-        if update_metadata:
+        # Update metadata if there are changes (only rank 0)
+        if update_metadata and self.rank == 0:
             self._update_metadata()
 
         # Get serializer for this object type
@@ -331,7 +473,7 @@ class TensorDumper:
 
         # Serialize and save
         serializer.save(obj, filepath)
-        print(f"Dumped {type(obj).__name__} to {filepath}")
+        print(f"[Rank {self.rank}] Dumped {type(obj).__name__} to {filepath}")
 
     def compare(self, a: Any, b: Any, atol: float = 1e-8, rtol: float = 1e-5, **kwargs) -> bool:
         """

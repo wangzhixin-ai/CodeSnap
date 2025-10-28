@@ -27,6 +27,10 @@ When debugging ML/DL models, you often need to:
 - 🔧 **Type-agnostic**: Supports PyTorch tensors, NumPy arrays, and any Python object
 - 📁 **Auto-organized**: Timestamped directories for each run
 - ⚡ **Smart updates**: Only saves metadata when it changes
+- 🌐 **Distributed training support**: Works seamlessly with multi-GPU/multi-node training
+  - Single shared folder for all ranks
+  - Only rank 0 saves metadata
+  - Automatic rank detection and synchronization
 
 ### Reproducibility Features
 - 🚀 **Command tracking**: Saves the exact command used to start your program
@@ -63,6 +67,8 @@ pip install tensor-dumper[all]    # Install all optional dependencies
 
 ## Quick Start
 
+### Single Process
+
 ```python
 import tensor_dumper
 import torch
@@ -81,6 +87,50 @@ tensor_dumper.dump(attention_weights, "attention")
 
 # Compare tensors with tolerance
 is_close = tensor_dumper.compare(output1, output2, atol=1e-5, rtol=1e-5)
+```
+
+### Distributed Training (Multi-GPU)
+
+In distributed training scenarios, `tensor_dumper` automatically:
+- Creates **only one** timestamped folder (shared by all ranks)
+- Only **rank 0** saves metadata (runtime_info.json, packages.json, git_info.json)
+- All ranks can dump data with rank-specific filenames
+
+```python
+import torch
+import torch.distributed as dist
+import tensor_dumper
+
+# Initialize distributed training (your existing code)
+dist.init_process_group(backend='nccl')
+rank = dist.get_rank()
+
+# Initialize tensor_dumper (all ranks call this)
+# Only rank 0 creates folder and saves metadata
+tensor_dumper.init("experiments")
+
+# All ranks can dump tensors
+# Files will be named: layer1_output_rank0.pt, layer1_output_rank1.pt, etc.
+output = model(input)
+tensor_dumper.dump(output, "layer1_output")
+
+# Only rank 0 will update metadata
+loss = criterion(output, target)
+tensor_dumper.dump(loss, "loss")
+```
+
+**Output structure in distributed mode:**
+```
+experiments/
+└── 20251028_143041/              # Single folder (not 8 copies!)
+    ├── runtime_info.json         # Only from rank 0
+    ├── packages.json             # Only from rank 0
+    ├── git_info.json             # Only from rank 0
+    ├── project.patch             # Only from rank 0
+    ├── layer1_output_rank0.pt    # From rank 0
+    ├── layer1_output_rank1.pt    # From rank 1
+    ├── layer1_output_rank2.pt    # From rank 2
+    └── ...                       # From other ranks
 ```
 
 ## Output Structure
