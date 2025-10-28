@@ -30,7 +30,6 @@ def _get_rank_info():
     Returns:
         tuple: (rank, world_size, is_distributed)
     """
-    # Try torch.distributed first
     try:
         import torch.distributed as dist
         if dist.is_available() and dist.is_initialized():
@@ -80,7 +79,6 @@ class TensorDumper:
 
         # Generate timestamp (only rank 0 creates it, others will receive it)
         if self.rank == 0:
-            # Create timestamped subfolder (Shanghai timezone)
             if ZoneInfo is not None:
                 # Python 3.9+
                 shanghai_tz = ZoneInfo('Asia/Shanghai')
@@ -106,20 +104,16 @@ class TensorDumper:
             self.folder.mkdir(parents=True, exist_ok=True)
             self.counter = 0
 
-            # Save runtime information
             self._save_runtime_info()
 
-            # Collect and save initial metadata (split into separate files)
             self._update_metadata()
 
-            print(f"[Rank {self.rank}] TensorDumper initialized. Output folder: {self.folder}")
+            print(f"[TensorDumper] Initialized. Output: {self.folder}")
         else:
-            # Non-rank0 processes wait for rank0 to finish initialization
-            if self.is_distributed:
-                self._barrier()
-
             self.counter = 0
-            print(f"[Rank {self.rank}] TensorDumper initialized. Using folder: {self.folder}")
+
+        if self.is_distributed:
+            self._barrier()
 
     def _broadcast_timestamp(self, timestamp: Optional[str]) -> str:
         """
@@ -136,30 +130,36 @@ class TensorDumper:
             import torch.distributed as dist
 
             if dist.is_available() and dist.is_initialized():
-                # Broadcast timestamp length first
+                device = None
+                backend = dist.get_backend()
+                if backend == 'nccl':
+                    if torch.cuda.is_available():
+                        device = torch.device(f'cuda:{torch.cuda.current_device()}')
+                else:
+                    device = torch.device('cpu')
+
                 if self.rank == 0:
                     ts_bytes = timestamp.encode('utf-8')
-                    length = torch.tensor(len(ts_bytes), dtype=torch.long)
+                    length = torch.tensor(len(ts_bytes), dtype=torch.long, device=device)
                 else:
-                    length = torch.tensor(0, dtype=torch.long)
+                    length = torch.tensor(0, dtype=torch.long, device=device)
 
                 dist.broadcast(length, src=0)
 
-                # Broadcast timestamp
                 if self.rank == 0:
-                    ts_tensor = torch.tensor(list(ts_bytes), dtype=torch.uint8)
+                    ts_tensor = torch.tensor(list(ts_bytes), dtype=torch.uint8, device=device)
                 else:
-                    ts_tensor = torch.zeros(length.item(), dtype=torch.uint8)
+                    ts_tensor = torch.zeros(length.item(), dtype=torch.uint8, device=device)
 
                 dist.broadcast(ts_tensor, src=0)
 
-                timestamp = bytes(ts_tensor.tolist()).decode('utf-8')
+                timestamp = bytes(ts_tensor.cpu().tolist()).decode('utf-8')
                 return timestamp
-        except (ImportError, RuntimeError):
-            pass
+        except (ImportError, RuntimeError) as e:
+            import warnings
+            warnings.warn(f"[Rank {self.rank}] Timestamp broadcast failed: {e}. Using fallback.")
 
-        # Fallback: if broadcast fails, use a simple timestamp
-        # This may cause issues in distributed training, but won't crash
+
         if timestamp is None:
             import time
             time.sleep(0.1 * self.rank)  # Small delay to avoid race conditions
@@ -177,9 +177,16 @@ class TensorDumper:
     def _barrier(self):
         """Synchronization barrier for distributed training."""
         try:
+            import torch
             import torch.distributed as dist
             if dist.is_available() and dist.is_initialized():
-                dist.barrier()
+                # For NCCL backend, specify device_ids to avoid warning
+                backend = dist.get_backend()
+                if backend == 'nccl' and torch.cuda.is_available():
+                    device_ids = [torch.cuda.current_device()]
+                    dist.barrier(device_ids=device_ids)
+                else:
+                    dist.barrier()
         except (ImportError, RuntimeError):
             # If barrier fails, just continue (may cause race conditions)
             import time
@@ -413,11 +420,8 @@ class TensorDumper:
         """
         if self.rank == 0:
             self._update_metadata()
-            print(f"[Rank {self.rank}] Metadata updated:")
-            print(f"  - {self.folder / 'packages.json'}")
-            print(f"  - {self.folder / 'git_info.json'}")
-        else:
-            print(f"[Rank {self.rank}] Skipping metadata update (only rank 0 updates metadata)")
+            print(f"[TensorDumper] Metadata updated.")
+        # Other ranks stay silent
 
     def enable(self):
         """Enable dumping."""
@@ -427,19 +431,38 @@ class TensorDumper:
         """Disable dumping."""
         self.enabled = False
 
-    def dump(self, obj: Any = None, name: Optional[str] = None, update_metadata: bool = True):
+    def dump(self, obj: Any = None, name: Optional[str] = None, step: Optional[int] = None, update_metadata: bool = True):
         """
         Dump an object to disk.
 
+        Each dump is saved in a separate subfolder to organize data by step/iteration.
+
         In distributed training:
         - All ranks can dump data
-        - File names will include rank information (e.g., "layer1_output_rank0.pt")
+        - File names will include rank information (e.g., "loss_rank0.pt")
         - Only rank 0 updates metadata
 
         Args:
             obj: Object to dump (torch.Tensor, numpy.ndarray, or any Python object)
-            name: Optional name for the dump file
+            name: Optional name for the dump file (default: "data")
+            step: Optional step/iteration number. If provided, data will be saved in "step_{step:06d}/" subfolder.
+                  If not provided, uses internal counter and saves in "dump_{counter:04d}/" subfolder.
             update_metadata: Whether to check and update metadata if changed (default: True)
+
+        Examples:
+            # Save loss at step 100
+            dumper.dump(loss, name="loss", step=100)
+            # -> saves to: folder/step_000100/loss_rank0.pt
+
+            # Save multiple tensors at the same step
+            dumper.dump(loss, name="loss", step=100)
+            dumper.dump(grad, name="gradient", step=100)
+            # -> saves to: folder/step_000100/loss_rank0.pt
+            #              folder/step_000100/gradient_rank0.pt
+
+            # Auto-increment mode (no step provided)
+            dumper.dump(loss, name="loss")
+            # -> saves to: folder/dump_0000/loss_rank0.pt
         """
         if not self.enabled:
             return
@@ -450,15 +473,28 @@ class TensorDumper:
         if obj is None:
             return
 
+        # Determine subfolder name
+        if step is not None:
+            # Use user-provided step number
+            subfolder_name = f"step_{step:06d}"
+        else:
+            # Use internal counter and auto-increment
+            subfolder_name = f"dump_{self.counter:04d}"
+            self.counter += 1
+
+        # Create subfolder for this dump
+        dump_folder = self.folder / subfolder_name
+        dump_folder.mkdir(parents=True, exist_ok=True)
+
         # Generate filename
         if name is None:
-            name = f"dump_{self.counter:04d}"
+            name = "data"
 
         # Add rank suffix in distributed mode
         if self.is_distributed and self.world_size > 1:
-            name = f"{name}_rank{self.rank}"
-
-        self.counter += 1
+            filename = f"{name}_rank{self.rank}"
+        else:
+            filename = name
 
         # Update metadata if there are changes (only rank 0)
         if update_metadata and self.rank == 0:
@@ -469,11 +505,10 @@ class TensorDumper:
 
         # Determine file extension
         ext = serializer.get_extension()
-        filepath = self.folder / f"{name}{ext}"
+        filepath = dump_folder / f"{filename}{ext}"
 
-        # Serialize and save
+        # Serialize and save (silently, without logging)
         serializer.save(obj, filepath)
-        print(f"[Rank {self.rank}] Dumped {type(obj).__name__} to {filepath}")
 
     def compare(self, a: Any, b: Any, atol: float = 1e-8, rtol: float = 1e-5, **kwargs) -> bool:
         """
