@@ -29,7 +29,7 @@ def run_test(test_file, description):
 def main():
     """Run all test scripts."""
     print("\n" + "=" * 70)
-    print("TENSOR DUMPER - COMPLETE TEST SUITE")
+    print("CODESNAP - COMPLETE TEST SUITE")
     print("=" * 70)
 
     tests = [

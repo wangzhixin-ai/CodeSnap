@@ -1,3 +1,3 @@
 """
-Tests for tensor-dumper package.
+Tests for codesnap package.
 """

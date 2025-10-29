@@ -1,4 +1,4 @@
-"""Setup script for tensor_dumper package."""
+"""Setup script for codesnap package."""
 
 from setuptools import setup, find_packages
 
@@ -6,14 +6,14 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="tensor-dumper",
+    name="codesnap",
     version="0.1.0",
     author="Wang Zhixin",
     author_email="wangzx@sii.edu.cn",
     description="A comprehensive debugging tool for ML/DL with complete reproducibility tracking",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/wangzhixin-ai/tensor-dumper",
+    url="https://github.com/wangzhixin-ai/CodeSnap",
     packages=find_packages(exclude=["tests", "tests.*"]),
     classifiers=[
         "Development Status :: 3 - Alpha",
@@ -41,7 +41,7 @@ setup(
     },
     keywords="debugging tensor numpy pytorch machine-learning deep-learning",
     project_urls={
-        "Bug Reports": "https://github.com/wangzhixin-ai/tensor-dumper/issues",
-        "Source": "https://github.com/wangzhixin-ai/tensor-dumper",
+        "Bug Reports": "https://github.com/wangzhixin-ai/CodeSnap/issues",
+        "Source": "https://github.com/wangzhixin-ai/CodeSnap",
     },
 )

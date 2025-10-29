@@ -1,13 +1,13 @@
-# Tensor Dumper
+# CodeSnap
 
 [![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A comprehensive debugging tool for machine learning and deep learning development. Tensor Dumper helps you save, compare, and track tensors, arrays, and other Python objects with complete reproducibility.
+A comprehensive debugging tool for machine learning and deep learning development. CodeSnap helps you save, compare, and track tensors, arrays, and other Python objects with complete reproducibility.
 
-## Why Tensor Dumper?
+## Why CodeSnap?
 
-When debugging ML/DL models, you need to save intermediate outputs, compare runs, and reproduce experiments months later. Tensor Dumper automatically captures your data along with everything needed for reproducibility: git commits and uncommitted changes, package versions, runtime environment, and command-line arguments.
+When debugging ML/DL models, you need to save intermediate outputs, compare runs, and reproduce experiments months later. CodeSnap automatically captures your data along with everything needed for reproducibility: git commits and uncommitted changes, package versions, runtime environment, and command-line arguments.
 
 ## Features
 
@@ -25,16 +25,16 @@ When debugging ML/DL models, you need to save intermediate outputs, compare runs
 
 ### From Source
 ```bash
-git clone https://github.com/wangzhixin-ai/tensor-dumper.git
-cd tensor-dumper
+git clone https://github.com/wangzhixin-ai/CodeSnap.git
+cd CodeSnap
 pip install -e .
 ```
 
 ### Optional Dependencies
 ```bash
-pip install tensor-dumper[numpy]  # For NumPy support
-pip install tensor-dumper[torch]  # For PyTorch support
-pip install tensor-dumper[all]    # Install all optional dependencies
+pip install codesnap[numpy]  # For NumPy support
+pip install codesnap[torch]  # For PyTorch support
+pip install codesnap[all]    # Install all optional dependencies
 ```
 
 ## Quick Start
@@ -42,28 +42,28 @@ pip install tensor-dumper[all]    # Install all optional dependencies
 ### Single Process
 
 ```python
-import tensor_dumper
+import codesnap
 import torch
 
 # Initialize with base directory
 # Creates: experiments/20251028_143041/ (timestamped)
-tensor_dumper.init("experiments")
+codesnap.init("experiments")
 
 # Dump tensors
 output = torch.randn(10, 10)
-tensor_dumper.dump(output, "layer1_output")
+codesnap.dump(output, "layer1_output")
 
 # Dump multiple objects
-tensor_dumper.dump(hidden_state, "hidden")
-tensor_dumper.dump(attention_weights, "attention")
+codesnap.dump(hidden_state, "hidden")
+codesnap.dump(attention_weights, "attention")
 
 # Compare tensors with tolerance
-is_close = tensor_dumper.compare(output1, output2, atol=1e-5, rtol=1e-5)
+is_close = codesnap.compare(output1, output2, atol=1e-5, rtol=1e-5)
 ```
 
 ### Distributed Training (Multi-GPU)
 
-In distributed training scenarios, `tensor_dumper` automatically:
+In distributed training scenarios, `codesnap` automatically:
 - Creates **only one** timestamped folder (shared by all ranks)
 - Only **rank 0** saves metadata (runtime_info.json, packages.json, git_info.json)
 - All ranks can dump data with rank-specific filenames
@@ -71,24 +71,24 @@ In distributed training scenarios, `tensor_dumper` automatically:
 ```python
 import torch
 import torch.distributed as dist
-import tensor_dumper
+import codesnap
 
 # Initialize distributed training (your existing code)
 dist.init_process_group(backend='nccl')
 rank = dist.get_rank()
 
-# Initialize tensor_dumper (all ranks call this)
+# Initialize codesnap (all ranks call this)
 # Only rank 0 creates folder and saves metadata
-tensor_dumper.init("experiments")
+codesnap.init("experiments")
 
 # All ranks can dump tensors
 # Files will be named: layer1_output_rank0.pt, layer1_output_rank1.pt, etc.
 output = model(input)
-tensor_dumper.dump(output, "layer1_output")
+codesnap.dump(output, "layer1_output")
 
 # Only rank 0 will update metadata
 loss = criterion(output, target)
-tensor_dumper.dump(loss, "loss")
+codesnap.dump(loss, "loss")
 ```
 
 
@@ -129,7 +129,7 @@ experiments/
 ### Initialization
 
 ```python
-tensor_dumper.init(folder_name: str)
+codesnap.init(folder_name: str)
 ```
 Initialize the dumper. Creates a timestamped subdirectory and saves environment metadata.
 
@@ -144,7 +144,7 @@ Initialize the dumper. Creates a timestamped subdirectory and saves environment 
 ### Dumping Data
 
 ```python
-tensor_dumper.dump(obj, name=None, update_metadata=True)
+codesnap.dump(obj, name=None, update_metadata=True)
 ```
 Dump an object to disk.
 
@@ -161,7 +161,7 @@ Dump an object to disk.
 ### Comparing Data
 
 ```python
-tensor_dumper.compare(a, b, atol=1e-8, rtol=1e-5) -> bool
+codesnap.compare(a, b, atol=1e-8, rtol=1e-5) -> bool
 ```
 Compare two objects or files with tolerance. **Supports cross-format comparison!**
 
@@ -180,25 +180,25 @@ Compare two objects or files with tolerance. **Supports cross-format comparison!
 
 ```python
 # Compare objects directly
-tensor_dumper.compare(tensor1, tensor2)
+codesnap.compare(tensor1, tensor2)
 
 # Compare files (no need to load manually!)
-tensor_dumper.compare("experiments/20251028_143041/loss_rank0.pt",
+codesnap.compare("experiments/20251028_143041/loss_rank0.pt",
                       "experiments/20251028_143041/loss_rank1.pt")
 
 # Cross-format comparison (NEW!)
 # Compare PyTorch tensor file with NumPy array file
-tensor_dumper.compare("output.pt", "output.npy")
+codesnap.compare("output.pt", "output.npy")
 
 # Compare NumPy array with PyTorch tensor
 import torch
 import numpy as np
 my_tensor = torch.randn(10, 10)
 my_array = np.random.randn(10, 10)
-tensor_dumper.compare(my_tensor, my_array)
+codesnap.compare(my_tensor, my_array)
 
 # Compare file with in-memory object
-tensor_dumper.compare("saved_tensor.pt", my_array)  # Works even if formats differ!
+codesnap.compare("saved_tensor.pt", my_array)  # Works even if formats differ!
 ```
 
 **How cross-format comparison works:**
@@ -209,8 +209,8 @@ tensor_dumper.compare("saved_tensor.pt", my_array)  # Works even if formats diff
 ### Control Functions
 
 ```python
-tensor_dumper.enable()         # Enable dumping
-tensor_dumper.disable()        # Disable dumping
-tensor_dumper.update_metadata() # Manually update metadata
+codesnap.enable()         # Enable dumping
+codesnap.disable()        # Disable dumping
+codesnap.update_metadata() # Manually update metadata
 ```
 

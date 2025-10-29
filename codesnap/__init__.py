@@ -1,5 +1,5 @@
 """
-Tensor Dumper - A flexible debugging tool for ML/DL development.
+CodeSnap - A flexible debugging tool for ML/DL development.
 
 This tool allows you to easily dump and compare tensors, numpy arrays,
 and other Python objects during debugging.

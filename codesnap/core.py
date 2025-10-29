@@ -1,5 +1,5 @@
 """
-Core functionality for tensor_dumper.
+Core functionality for codesnap.
 """
 
 import json
@@ -48,7 +48,7 @@ def _get_rank_info():
     return 0, 1, False
 
 
-class TensorDumper:
+class CodeSnap:
     """Main dumper class that handles initialization and dumping."""
 
     def __init__(self):
@@ -108,7 +108,7 @@ class TensorDumper:
 
             self._update_metadata()
 
-            print(f"[TensorDumper] Initialized. Output: {self.folder}")
+            print(f"[CodeSnap] Initialized. Output: {self.folder}")
         else:
             self.counter = 0
 
@@ -420,7 +420,7 @@ class TensorDumper:
         """
         if self.rank == 0:
             self._update_metadata()
-            print(f"[TensorDumper] Metadata updated.")
+            print(f"[CodeSnap] Metadata updated.")
         # Other ranks stay silent
 
     def enable(self):
@@ -468,7 +468,7 @@ class TensorDumper:
             return
 
         if self.folder is None:
-            raise RuntimeError("TensorDumper not initialized. Call init() first.")
+            raise RuntimeError("CodeSnap not initialized. Call init() first.")
 
         if obj is None:
             return
@@ -566,13 +566,13 @@ class TensorDumper:
 
         Examples:
             >>> # Compare objects directly
-            >>> tensor_dumper.compare(tensor1, tensor2)
+            >>> codesnap.compare(tensor1, tensor2)
 
             >>> # Compare files
-            >>> tensor_dumper.compare("output_rank0.pt", "output_rank1.pt")
+            >>> codesnap.compare("output_rank0.pt", "output_rank1.pt")
 
             >>> # Compare file with object
-            >>> tensor_dumper.compare("saved.pt", my_tensor)
+            >>> codesnap.compare("saved.pt", my_tensor)
         """
         # Load from file if input is a string or Path
         if isinstance(a, (str, Path)):
@@ -587,7 +587,7 @@ class TensorDumper:
 
 
 # Global instance
-_dumper = TensorDumper()
+_dumper = CodeSnap()
 
 # Public API
 init = _dumper.init

@@ -1,14 +1,14 @@
 """
-Basic test script for tensor_dumper (no external dependencies required).
+Basic test script for codesnap (no external dependencies required).
 """
 
 import sys
 from pathlib import Path
 
-# Add parent directory to path to import tensor_dumper
+# Add parent directory to path to import codesnap
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import tensor_dumper
+import codesnap
 
 
 def test_basic():
@@ -18,20 +18,20 @@ def test_basic():
     print("=" * 60)
 
     # Initialize
-    tensor_dumper.init("test_output/basic")
+    codesnap.init("test_output/basic")
 
     # Test with various Python objects
     print("\n1. Testing with integer:")
-    tensor_dumper.dump(42, "test_int")
+    codesnap.dump(42, "test_int")
 
     print("\n2. Testing with string:")
-    tensor_dumper.dump("Hello, World!", "test_string")
+    codesnap.dump("Hello, World!", "test_string")
 
     print("\n3. Testing with list:")
-    tensor_dumper.dump([1, 2, 3, 4, 5], "test_list")
+    codesnap.dump([1, 2, 3, 4, 5], "test_list")
 
     print("\n4. Testing with dict:")
-    tensor_dumper.dump({"a": 1, "b": 2, "c": 3}, "test_dict")
+    codesnap.dump({"a": 1, "b": 2, "c": 3}, "test_dict")
 
     print("\n5. Testing with nested structure:")
     complex_obj = {
@@ -42,11 +42,11 @@ def test_basic():
             "key2": [10, 20, 30]
         }
     }
-    tensor_dumper.dump(complex_obj, "test_complex")
+    codesnap.dump(complex_obj, "test_complex")
 
     print("\n6. Testing auto-naming (no name parameter):")
-    tensor_dumper.dump([100, 200, 300])
-    tensor_dumper.dump([400, 500, 600])
+    codesnap.dump([100, 200, 300])
+    codesnap.dump([400, 500, 600])
 
     print("\n✓ Basic tests completed successfully!")
 
@@ -57,19 +57,19 @@ def test_enable_disable():
     print("Testing enable/disable functionality")
     print("=" * 60)
 
-    tensor_dumper.init("test_output/enable_disable")
+    codesnap.init("test_output/enable_disable")
 
     print("\n1. Dumping with enabled (default):")
-    tensor_dumper.dump([1, 2, 3], "enabled_dump")
+    codesnap.dump([1, 2, 3], "enabled_dump")
 
     print("\n2. Disabling dumper:")
-    tensor_dumper.disable()
+    codesnap.disable()
     print("Attempting to dump (should not output):")
-    tensor_dumper.dump([4, 5, 6], "disabled_dump")
+    codesnap.dump([4, 5, 6], "disabled_dump")
 
     print("\n3. Re-enabling dumper:")
-    tensor_dumper.enable()
-    tensor_dumper.dump([7, 8, 9], "re_enabled_dump")
+    codesnap.enable()
+    codesnap.dump([7, 8, 9], "re_enabled_dump")
 
     print("\n✓ Enable/disable tests completed successfully!")
 
@@ -82,22 +82,22 @@ def test_compare():
 
     # Compare basic Python objects
     print("\n1. Comparing identical integers:")
-    result = tensor_dumper.compare(42, 42)
+    result = codesnap.compare(42, 42)
     print(f"   42 == 42: {result}")
     assert result == True, "Integers should be equal"
 
     print("\n2. Comparing different integers:")
-    result = tensor_dumper.compare(42, 43)
+    result = codesnap.compare(42, 43)
     print(f"   42 == 43: {result}")
     assert result == False, "Different integers should not be equal"
 
     print("\n3. Comparing identical strings:")
-    result = tensor_dumper.compare("hello", "hello")
+    result = codesnap.compare("hello", "hello")
     print(f"   'hello' == 'hello': {result}")
     assert result == True, "Strings should be equal"
 
     print("\n4. Comparing identical lists:")
-    result = tensor_dumper.compare([1, 2, 3], [1, 2, 3])
+    result = codesnap.compare([1, 2, 3], [1, 2, 3])
     print(f"   [1,2,3] == [1,2,3]: {result}")
     assert result == True, "Lists should be equal"
 
@@ -112,7 +112,7 @@ def test_metadata():
 
     import json
 
-    tensor_dumper.init("test_output/metadata")
+    codesnap.init("test_output/metadata")
 
     # Read and display metadata
     metadata_file = Path("test_output/metadata/metadata.json")
@@ -138,7 +138,7 @@ def test_metadata():
 def main():
     """Run all tests."""
     print("\n" + "=" * 60)
-    print("TENSOR DUMPER - BASIC TESTS")
+    print("CODESNAP - BASIC TESTS")
     print("=" * 60)
 
     try:

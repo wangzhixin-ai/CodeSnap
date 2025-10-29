@@ -3,7 +3,7 @@ requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tensor-dumper"
+name = "codesnap"
 version = "0.1.0"
 description = "A comprehensive debugging tool for ML/DL with complete reproducibility tracking"
 readme = "README.md"
@@ -31,9 +31,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/wangzhixin-ai/tensor-dumper"
-"Bug Reports" = "https://github.com/wangzhixin-ai/tensor-dumper/issues"
-"Source" = "https://github.com/wangzhixin-ai/tensor-dumper"
+Homepage = "https://github.com/wangzhixin-ai/CodeSnap"
+"Bug Reports" = "https://github.com/wangzhixin-ai/CodeSnap/issues"
+"Source" = "https://github.com/wangzhixin-ai/CodeSnap"
 
 [project.optional-dependencies]
 torch = ["torch"]

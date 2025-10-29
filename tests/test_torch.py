@@ -1,11 +1,11 @@
 """
-Test script for tensor_dumper with PyTorch tensors.
+Test script for codesnap with PyTorch tensors.
 """
 
 import sys
 from pathlib import Path
 
-# Add parent directory to path to import tensor_dumper
+# Add parent directory to path to import codesnap
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 try:
@@ -14,7 +14,7 @@ except ImportError:
     print("PyTorch is not installed. Please install it with: pip install torch")
     sys.exit(1)
 
-import tensor_dumper
+import codesnap
 
 
 def test_torch_dump():
@@ -23,40 +23,40 @@ def test_torch_dump():
     print("Testing PyTorch tensor dumping")
     print("=" * 60)
 
-    tensor_dumper.init("test_output/torch")
+    codesnap.init("test_output/torch")
 
     # Test with various PyTorch tensors
     print("\n1. Testing with 1D tensor:")
     tensor1d = torch.tensor([1, 2, 3, 4, 5])
     print(f"   Shape: {tensor1d.shape}, dtype: {tensor1d.dtype}")
-    tensor_dumper.dump(tensor1d, "torch_1d")
+    codesnap.dump(tensor1d, "torch_1d")
 
     print("\n2. Testing with 2D tensor:")
     tensor2d = torch.tensor([[1, 2, 3], [4, 5, 6]])
     print(f"   Shape: {tensor2d.shape}, dtype: {tensor2d.dtype}")
-    tensor_dumper.dump(tensor2d, "torch_2d")
+    codesnap.dump(tensor2d, "torch_2d")
 
     print("\n3. Testing with 3D tensor:")
     tensor3d = torch.randn(2, 3, 4)
     print(f"   Shape: {tensor3d.shape}, dtype: {tensor3d.dtype}")
-    tensor_dumper.dump(tensor3d, "torch_3d")
+    codesnap.dump(tensor3d, "torch_3d")
 
     print("\n4. Testing with float32 tensor:")
     tensor_float32 = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
     print(f"   Shape: {tensor_float32.shape}, dtype: {tensor_float32.dtype}")
-    tensor_dumper.dump(tensor_float32, "torch_float32")
+    codesnap.dump(tensor_float32, "torch_float32")
 
     print("\n5. Testing with large tensor:")
     tensor_large = torch.randn(100, 100)
     print(f"   Shape: {tensor_large.shape}, dtype: {tensor_large.dtype}")
-    tensor_dumper.dump(tensor_large, "torch_large")
+    codesnap.dump(tensor_large, "torch_large")
 
     # Test with GPU tensor if available
     if torch.cuda.is_available():
         print("\n6. Testing with GPU tensor:")
         tensor_gpu = torch.randn(10, 10).cuda()
         print(f"   Shape: {tensor_gpu.shape}, dtype: {tensor_gpu.dtype}, device: {tensor_gpu.device}")
-        tensor_dumper.dump(tensor_gpu, "torch_gpu")
+        codesnap.dump(tensor_gpu, "torch_gpu")
     else:
         print("\n6. GPU not available, skipping GPU tensor test")
 
@@ -72,27 +72,27 @@ def test_torch_compare():
     print("\n1. Comparing identical tensors:")
     tensor1 = torch.tensor([1, 2, 3, 4, 5])
     tensor2 = torch.tensor([1, 2, 3, 4, 5])
-    result = tensor_dumper.compare(tensor1, tensor2)
+    result = codesnap.compare(tensor1, tensor2)
     print(f"   Result: {result}")
     assert result == True, "Identical tensors should be equal"
 
     print("\n2. Comparing different tensors:")
     tensor3 = torch.tensor([1, 2, 3, 4, 6])
-    result = tensor_dumper.compare(tensor1, tensor3)
+    result = codesnap.compare(tensor1, tensor3)
     print(f"   Result: {result}")
     assert result == False, "Different tensors should not be equal"
 
     print("\n3. Comparing tensors with small difference (within tolerance):")
     tensor4 = torch.tensor([1.0, 2.0, 3.0])
     tensor5 = torch.tensor([1.0000001, 2.0000001, 3.0000001])
-    result = tensor_dumper.compare(tensor4, tensor5, atol=1e-5, rtol=1e-5)
+    result = codesnap.compare(tensor4, tensor5, atol=1e-5, rtol=1e-5)
     print(f"   Result: {result}")
     assert result == True, "Tensors within tolerance should be equal"
 
     print("\n4. Comparing tensors with large difference (outside tolerance):")
     tensor6 = torch.tensor([1.0, 2.0, 3.0])
     tensor7 = torch.tensor([1.1, 2.1, 3.1])
-    result = tensor_dumper.compare(tensor6, tensor7, atol=1e-5, rtol=1e-5)
+    result = codesnap.compare(tensor6, tensor7, atol=1e-5, rtol=1e-5)
     print(f"   Result: {result}")
     assert result == False, "Tensors outside tolerance should not be equal"
 
@@ -113,12 +113,12 @@ def test_torch_nn_module():
             self.linear = nn.Linear(10, 10)
 
         def forward(self, x):
-            tensor_dumper.dump(x, "DecodeLayer_input")
+            codesnap.dump(x, "DecodeLayer_input")
             y = self.linear(x)
-            tensor_dumper.dump(y, "DecodeLayer_output")
+            codesnap.dump(y, "DecodeLayer_output")
             return y
 
-    tensor_dumper.init("test_output/torch_nn")
+    codesnap.init("test_output/torch_nn")
 
     # Create and test the module
     layer = DecodeLayer()
@@ -135,7 +135,7 @@ def test_torch_nn_module():
 def main():
     """Run all PyTorch tests."""
     print("\n" + "=" * 60)
-    print("TENSOR DUMPER - PYTORCH TESTS")
+    print("CODESNAP - PYTORCH TESTS")
     print("=" * 60)
 
     try:
