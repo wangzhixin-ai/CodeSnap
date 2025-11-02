@@ -53,6 +53,7 @@ class CodeSnap:
 
     def __init__(self):
         self.folder: Optional[Path] = None
+        self.latest_folder: Optional[Path] = None
         self.enabled = True
         self.registry = SerializerRegistry()
         self.counter = 0
@@ -108,7 +109,7 @@ class CodeSnap:
 
             self._update_metadata()
 
-            print(f"[CodeSnap] Initialized. Output: {self.folder}")
+            print(f"[CodeSnap] Initialized. Output 1 : {self.folder}")
         else:
             self.counter = 0
 
@@ -248,12 +249,12 @@ class CodeSnap:
             'python_version': current_metadata.get('python_version'),
             'platform': current_metadata.get('platform'),
             'all_packages': current_metadata.get('all_packages', {}),
-            'packages': {}
+            'local_packages': {}
         }
 
-        # Extract package info (without git info)
-        for pkg_name, pkg_info in current_metadata.get('packages', {}).items():
-            packages_data['packages'][pkg_name] = {
+        # Extract package info (without git info) for local packages
+        for pkg_name, pkg_info in current_metadata.get('local_packages', {}).items():
+            packages_data['local_packages'][pkg_name] = {
                 'name': pkg_info.get('name'),
                 'installed': pkg_info.get('installed'),
                 'version': pkg_info.get('version'),
@@ -263,8 +264,7 @@ class CodeSnap:
         # Prepare git_data and extract diffs to separate files
         git_data = {
             'project_git_info': None,
-            'packages_git_info': {},
-            'runtime_modifications': current_metadata.get('runtime_modifications', {})
+            'local_packages_git_info': {}
         }
 
         # Process project git info
@@ -284,23 +284,23 @@ class CodeSnap:
             else:
                 git_data['project_git_info'] = project_git
 
-        # Extract git info from packages
-        for pkg_name, pkg_info in current_metadata.get('packages', {}).items():
+        # Extract git info from local packages
+        for pkg_name, pkg_info in current_metadata.get('local_packages', {}).items():
             git_info = pkg_info.get('git_info')
             if git_info is not None:
                 # Extract git_diff to separate file
                 git_diff = git_info.get('git_diff')
                 if git_diff:
-                    diff_path = self.folder / f"{pkg_name}.patch"
+                    diff_path = self.folder / f"{pkg_name}_local.patch"
                     with open(diff_path, 'w') as f:
                         f.write(git_diff)
 
                     # Store git info without the diff content
                     git_info_copy = git_info.copy()
-                    git_info_copy['git_diff'] = f"See {pkg_name}.patch"
-                    git_data['packages_git_info'][pkg_name] = git_info_copy
+                    git_info_copy['git_diff'] = f"See {pkg_name}_local.patch"
+                    git_data['local_packages_git_info'][pkg_name] = git_info_copy
                 else:
-                    git_data['packages_git_info'][pkg_name] = git_info
+                    git_data['local_packages_git_info'][pkg_name] = git_info
 
         # First time initialization or force update
         if force or self.last_metadata is None:
@@ -312,10 +312,10 @@ class CodeSnap:
                 'python_version': self.last_metadata.get('python_version'),
                 'platform': self.last_metadata.get('platform'),
                 'all_packages': self.last_metadata.get('all_packages', {}),
-                'packages': {}
+                'local_packages': {}
             }
-            for pkg_name, pkg_info in self.last_metadata.get('packages', {}).items():
-                last_packages['packages'][pkg_name] = {
+            for pkg_name, pkg_info in self.last_metadata.get('local_packages', {}).items():
+                last_packages['local_packages'][pkg_name] = {
                     'name': pkg_info.get('name'),
                     'installed': pkg_info.get('installed'),
                     'version': pkg_info.get('version'),
@@ -326,17 +326,20 @@ class CodeSnap:
             # Check if git data has changed
             last_git = {
                 'project_git_info': self.last_metadata.get('project_git_info'),
-                'packages_git_info': {},
-                'runtime_modifications': self.last_metadata.get('runtime_modifications', {})
+                'local_packages_git_info': {}
             }
-            for pkg_name, pkg_info in self.last_metadata.get('packages', {}).items():
+            for pkg_name, pkg_info in self.last_metadata.get('local_packages', {}).items():
                 git_info = pkg_info.get('git_info')
                 if git_info is not None:
-                    last_git['packages_git_info'][pkg_name] = git_info
+                    last_git['local_packages_git_info'][pkg_name] = git_info
             git_changed = (git_data != last_git)
 
         # Save packages data if changed
         if packages_changed:
+            # Sort all_packages alphabetically before saving
+            if 'all_packages' in packages_data and isinstance(packages_data['all_packages'], dict):
+                packages_data['all_packages'] = dict(sorted(packages_data['all_packages'].items()))
+
             with open(packages_path, 'w') as f:
                 json.dump(packages_data, f, indent=2)
 
@@ -509,6 +512,38 @@ class CodeSnap:
 
         # Serialize and save (silently, without logging)
         serializer.save(obj, filepath)
+
+        # Update symlink in latest_tensor folder
+        self._update_symlink(filepath, f"{filename}{ext}")
+
+    def _update_symlink(self, source_path: Path, link_name: str):
+        """
+        Create or update a symbolic link in the latest_tensor folder.
+
+        Args:
+            source_path: Path to the actual file
+            link_name: Name of the symlink (including extension)
+        """
+        # Lazy creation of latest_folder on first dump
+        if self.latest_folder is None:
+            self.latest_folder = self.folder / "latest_tensor"
+            self.latest_folder.mkdir(parents=True, exist_ok=True)
+
+        link_path = self.latest_folder / link_name
+
+        # Remove existing symlink if it exists
+        if link_path.exists() or link_path.is_symlink():
+            link_path.unlink()
+
+        # Create new symlink (relative path for portability)
+        try:
+            # Use relative path from latest_folder to source_path
+            relative_path = os.path.relpath(source_path, self.latest_folder)
+            link_path.symlink_to(relative_path)
+        except OSError as e:
+            # On some systems (like Windows without admin rights), symlinks may fail
+            import warnings
+            warnings.warn(f"Failed to create symlink: {e}")
 
     def _load_from_file(self, filepath):
         """

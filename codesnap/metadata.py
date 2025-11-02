@@ -4,8 +4,6 @@ Metadata collection for packages.
 
 import sys
 import subprocess
-import inspect
-import hashlib
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 import importlib.metadata
@@ -123,83 +121,95 @@ def get_git_info(package_path: Path, max_log_entries: int = 50) -> Optional[Dict
         return {'error': str(e)}
 
 
-def detect_runtime_modifications(package_name: str) -> Optional[Dict[str, Any]]:
-    """Detect if a package has been modified at runtime (monkey patching, etc.).
+def is_local_package(location: str) -> bool:
+    """Check if a package is installed locally (not from PyPI).
 
     Args:
-        package_name: Name of the package to check
+        location: Package installation location
 
     Returns:
-        Dictionary with runtime modification info, or None if package not loaded
+        True if package is installed locally (editable install or local path)
+    """
+    if not location:
+        return False
+
+    location_path = Path(location)
+    location_str = str(location_path)
+
+    # Check if it's in site-packages or dist-packages (standard installation)
+    if 'site-packages' in location_str or 'dist-packages' in location_str:
+        return False
+
+    return True
+
+
+def get_editable_install_location(dist) -> Optional[str]:
+    """Get the actual source location for an editable install.
+
+    For editable installs, the distribution files are in site-packages,
+    but we want the actual source location. This function checks:
+    1. direct_url.json for the source path
+    2. .pth file content (for older style editable installs)
+
+    Args:
+        dist: Distribution object
+
+    Returns:
+        Actual source location if found, None otherwise
     """
     try:
-        module = __import__(package_name)
-        modifications = {
-            'package': package_name,
-            'modified_files': [],
-            'total_files_checked': 0
-        }
-
-        # Get all modules under this package
-        package_modules = []
-        for name, mod in sys.modules.items():
-            if name.startswith(package_name):
-                package_modules.append((name, mod))
-
-        for mod_name, mod in package_modules:
+        # Method 1: Check direct_url.json (modern editable installs)
+        if hasattr(dist, 'read_text'):
             try:
-                # Skip modules without __file__ (built-in modules)
-                if not hasattr(mod, '__file__') or mod.__file__ is None:
-                    continue
+                import json
+                direct_url_content = dist.read_text('direct_url.json')
+                if direct_url_content:
+                    direct_url_data = json.loads(direct_url_content)
+                    if direct_url_data.get('dir_info', {}).get('editable'):
+                        url = direct_url_data.get('url', '')
+                        # Remove file:// prefix
+                        # file:///path means file:// + /path (absolute path on Unix)
+                        # file://host/path means file:// + host/path (network path)
+                        if url.startswith('file://'):
+                            path = url[7:]  # Remove 'file://', keep the rest (including leading /)
+                        else:
+                            path = url
 
-                file_path = Path(mod.__file__)
-                if not file_path.exists() or file_path.suffix not in ['.py']:
-                    continue
-
-                modifications['total_files_checked'] += 1
-
-                # Read file from disk
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    disk_source = f.read()
-
-                disk_hash = hashlib.md5(disk_source.encode()).hexdigest()
-
-                # Try to get source from memory
-                try:
-                    memory_source = inspect.getsource(mod)
-                    memory_hash = hashlib.md5(memory_source.encode()).hexdigest()
-
-                    # Compare hashes
-                    if disk_hash != memory_hash:
-                        modifications['modified_files'].append({
-                            'module': mod_name,
-                            'file': str(file_path),
-                            'disk_hash': disk_hash,
-                            'memory_hash': memory_hash,
-                            'status': 'modified_at_runtime'
-                        })
-                except (OSError, TypeError):
-                    # Can't get source from memory, skip
-                    pass
-
+                        if path and Path(path).exists():
+                            return path
             except Exception:
-                # Skip files that can't be processed
-                continue
+                pass
 
-        modifications['has_runtime_modifications'] = len(modifications['modified_files']) > 0
-        return modifications
-
-    except ImportError:
+        # Method 2: Check .pth file (older style editable installs)
+        if dist.files:
+            for file in dist.files:
+                if file.name.endswith('.pth') and '__editable__' in file.name:
+                    pth_file = dist.locate_file(file)
+                    if pth_file and pth_file.exists():
+                        # Read the .pth file to get the actual location
+                        with open(pth_file, 'r') as f:
+                            content = f.read().strip()
+                            # .pth file may contain a path directly (not import statements)
+                            if content and not content.startswith('import') and Path(content).exists():
+                                return content
+        return None
+    except Exception:
         return None
 
 
-def get_package_info(package_name: str) -> Dict[str, Any]:
-    """Get complete information about a package."""
+def get_package_info(package_name: str, location: Optional[str] = None, version: Optional[str] = None) -> Dict[str, Any]:
+    """Get complete information about a package.
+
+    Args:
+        package_name: Name of the package
+        location: Optional pre-fetched location
+        version: Optional pre-fetched version
+    """
     info = {
         'name': package_name,
         'installed': False,
-        'version': None,
-        'location': None,
+        'version': version,
+        'location': location,
         'git_info': None
     }
 
@@ -208,19 +218,20 @@ def get_package_info(package_name: str) -> Dict[str, Any]:
         module = __import__(package_name)
         info['installed'] = True
 
-        # Get version
-        version = get_package_version(package_name)
-        info['version'] = version
+        # Get version if not provided
+        if version is None:
+            version = get_package_version(package_name)
+            info['version'] = version
 
-        # Get location
-        if hasattr(module, '__file__') and module.__file__:
-            location = Path(module.__file__).parent
-            info['location'] = str(location)
+        # Get location if not provided
+        if location is None and hasattr(module, '__file__') and module.__file__:
+            location = str(Path(module.__file__).parent)
+            info['location'] = location
 
-            # If no version (local package), try to get git info
-            if version is None:
-                git_info = get_git_info(location)
-                info['git_info'] = git_info
+        # Check if it's a local package and get git info
+        if location and is_local_package(location):
+            git_info = get_git_info(Path(location))
+            info['git_info'] = git_info
 
     except ImportError:
         pass
@@ -234,8 +245,7 @@ def collect_metadata() -> Dict[str, Any]:
         'python_version': sys.version,
         'platform': sys.platform,
         'all_packages': {},
-        'packages': {},
-        'runtime_modifications': {},
+        'local_packages': {},
         'project_git_info': None  # Current working directory git info
     }
 
@@ -248,32 +258,36 @@ def collect_metadata() -> Dict[str, Any]:
     except Exception:
         pass
 
-    # Get all installed packages with their versions
+    # Get all installed packages with their versions and locations
     try:
         for dist in importlib.metadata.distributions():
-            metadata['all_packages'][dist.name] = dist.version
+            package_name = dist.name
+            version = dist.version
+            metadata['all_packages'][package_name] = version
+
+            # Try to get location from distribution
+            location = None
+            if dist.files:
+                # First, check if this is an editable install and get the actual source location
+                editable_location = get_editable_install_location(dist)
+                if editable_location:
+                    location = editable_location
+                else:
+                    # Get the first file's parent directory
+                    first_file = list(dist.files)[0]
+                    if dist.locate_file(first_file):
+                        location = str(dist.locate_file(first_file).parent)
+
+            # Check if this is a local package
+            # IMPORTANT: Only add if not already in local_packages (to avoid overwriting with site-packages entry)
+            if location and is_local_package(location) and package_name not in metadata['local_packages']:
+                # Collect detailed info including git info for local packages
+                package_info = get_package_info(package_name, location=location, version=version)
+                if package_info['installed']:
+                    metadata['local_packages'][package_name] = package_info
+
     except Exception as e:
         # Fallback: record the error but continue
         metadata['all_packages'] = {'error': str(e)}
-
-    # Get detailed info for important ML/DL packages
-    packages_to_check = [
-        'torch',
-        'numpy',
-        'tensorflow',
-        'jax',
-        'pandas',
-        'scipy'
-    ]
-
-    for package_name in packages_to_check:
-        package_info = get_package_info(package_name)
-        if package_info['installed']:
-            metadata['packages'][package_name] = package_info
-
-            # Check for runtime modifications
-            runtime_mods = detect_runtime_modifications(package_name)
-            if runtime_mods and runtime_mods.get('has_runtime_modifications'):
-                metadata['runtime_modifications'][package_name] = runtime_mods
 
     return metadata
