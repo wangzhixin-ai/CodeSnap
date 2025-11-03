@@ -20,7 +20,7 @@ except ImportError:
         pytz = None
 
 from .registry import SerializerRegistry
-from .metadata import collect_metadata
+from .metadata import collect_metadata, get_imported_packages
 
 
 def _get_rank_info():
@@ -61,6 +61,7 @@ class CodeSnap:
         self.rank = 0
         self.world_size = 1
         self.is_distributed = False
+        self.imported_packages = {}  # Track imported packages and their versions
 
     def init(self, folder_name: str):
         """Initialize the dumper with output folder.
@@ -332,6 +333,66 @@ class CodeSnap:
         # Cache current metadata
         self.last_metadata = current_metadata
 
+    def _check_and_update_imported_packages(self):
+        """Check and update imported packages information.
+
+        Raises:
+            RuntimeError: If a package version has changed since the last dump
+        """
+        if self.folder is None:
+            return
+
+        # Only rank 0 updates the file
+        if self.rank != 0:
+            return
+
+        # Get currently imported packages
+        current_imported = get_imported_packages()
+
+        # Check for version changes
+        for pkg_name, pkg_info in current_imported.items():
+            if pkg_name in self.imported_packages:
+                old_version = self.imported_packages[pkg_name].get('version')
+                new_version = pkg_info.get('version')
+
+                # If both versions are available and different, raise error
+                if old_version and new_version and old_version != new_version:
+                    raise RuntimeError(
+                        f"Package '{pkg_name}' version changed from {old_version} to {new_version}. "
+                        f"This may cause reproducibility issues. Please restart the program."
+                    )
+
+        # Update imported_packages tracker
+        self.imported_packages.update(current_imported)
+
+        # Update packages.json file
+        packages_path = self.folder / "packages.json"
+
+        # Load existing packages.json if it exists
+        if packages_path.exists():
+            with open(packages_path, 'r') as f:
+                packages_data = json.load(f)
+        else:
+            packages_data = {
+                'python_version': None,
+                'platform': None,
+                'all_packages': {},
+                'local_packages': {}
+            }
+
+        # Update the imported_packages field
+        packages_data['imported_packages'] = self.imported_packages
+
+        # Sort all_packages and imported_packages alphabetically
+        if 'all_packages' in packages_data and isinstance(packages_data['all_packages'], dict):
+            packages_data['all_packages'] = dict(sorted(packages_data['all_packages'].items()))
+
+        packages_data['imported_packages'] = dict(sorted(packages_data['imported_packages'].items()))
+
+        # Write back to file
+        with open(packages_path, 'w') as f:
+            json.dump(packages_data, f, indent=2)
+
     def _metadata_equal(self, meta1: dict, meta2: dict) -> bool:
         """Check if two metadata dictionaries are equal (ignoring minor differences)."""
         # Compare critical fields
@@ -541,6 +602,10 @@ class CodeSnap:
         # Update metadata if there are changes (only rank 0)
         if update_metadata and self.rank == 0:
             self._update_metadata()
+
+        # Check and update imported packages (only rank 0)
+        if self.rank == 0:
+            self._check_and_update_imported_packages()
 
         # Get serializer for this object type
         serializer = self.registry.get_serializer(obj)

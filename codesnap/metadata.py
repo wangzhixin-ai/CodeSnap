@@ -363,3 +363,95 @@ def collect_metadata() -> Dict[str, Any]:
         pass
 
     return metadata
+
+
+def get_imported_packages() -> Dict[str, Dict[str, Any]]:
+    """Get information about currently imported packages.
+
+    Scans sys.modules to find all imported third-party packages (not built-in modules)
+    and collects their version and installation information.
+
+    Includes packages even if they don't have version info (e.g., not installed via pip),
+    but excludes Python standard library modules.
+
+    Returns:
+        Dictionary mapping package names to their info (version, location, etc.)
+    """
+    import sys
+
+    imported = {}
+    processed_packages = set()
+
+    # Get Python's standard library location
+    stdlib_dir = Path(sys.prefix) / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}"
+
+    for module_name, module in sys.modules.items():
+        # Skip built-in modules and modules without __file__
+        if not hasattr(module, '__file__') or module.__file__ is None:
+            continue
+
+        # Skip __main__ module
+        if module_name == '__main__':
+            continue
+
+        # Get top-level package name (e.g., 'numpy' from 'numpy.core.numeric')
+        top_level_name = module_name.split('.')[0]
+
+        # Skip if already processed
+        if top_level_name in processed_packages:
+            continue
+
+        # Skip internal/private modules (starting with _)
+        if top_level_name.startswith('_'):
+            continue
+
+        processed_packages.add(top_level_name)
+
+        # Get package location
+        location = None
+        try:
+            module_file = Path(module.__file__).resolve()
+            # For a module file, get its parent (package directory)
+            if module_file.name == '__init__.py':
+                location = str(module_file.parent)
+            else:
+                location = str(module_file.parent)
+
+            # For nested modules, find the top-level package directory
+            current = Path(location)
+            while (current.parent / '__init__.py').exists():
+                current = current.parent
+            location = str(current)
+
+        except Exception:
+            continue
+
+        # Filter out standard library modules
+        # Standard library modules are in Python's lib directory but NOT in site-packages
+        if location:
+            location_path = Path(location)
+
+            # Check if it's in standard library location
+            try:
+                is_in_stdlib = stdlib_dir in location_path.parents or location_path == stdlib_dir
+            except:
+                is_in_stdlib = str(stdlib_dir) in location
+
+            # Check if it's in site-packages or dist-packages
+            is_in_site_packages = 'site-packages' in location or 'dist-packages' in location
+
+            # Skip if it's in standard library but not in site-packages
+            if is_in_stdlib and not is_in_site_packages:
+                continue
+
+        # Try to get package version (may be None for non-pip-installed packages)
+        version = get_package_version(top_level_name)
+
+        # Store package info (version can be None)
+        imported[top_level_name] = {
+            'name': top_level_name,
+            'version': version,
+            'location': location
+        }
+
+    return imported
