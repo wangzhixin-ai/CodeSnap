@@ -53,7 +53,6 @@ class CodeSnap:
 
     def __init__(self):
         self.folder: Optional[Path] = None
-        self.latest_folder: Optional[Path] = None
         self.enabled = True
         self.registry = SerializerRegistry()
         self.counter = 0
@@ -62,6 +61,8 @@ class CodeSnap:
         self.world_size = 1
         self.is_distributed = False
         self.imported_packages = {}  # Track imported packages and their versions
+        self.dump_history = {}  # Track dump folders for each variable: {var_name: [folder1, folder2, ...]}
+        self.var_counters = {}  # Track counter for each variable name
 
     def init(self, folder_name: str):
         """Initialize the dumper with output folder.
@@ -274,13 +275,13 @@ class CodeSnap:
                 # Extract git_diff to separate file
                 git_diff = git_info.get('git_diff')
                 if git_diff:
-                    diff_path = self.folder / f"{pkg_name}_local.patch"
+                    diff_path = self.folder / f"{pkg_name}.patch"
                     with open(diff_path, 'w') as f:
                         f.write(git_diff)
 
                     # Store git info without the diff content
                     git_info_copy = git_info.copy()
-                    git_info_copy['git_diff'] = f"See {pkg_name}_local.patch"
+                    git_info_copy['git_diff'] = f"See {pkg_name}.patch"
                     git_data['local_packages_git_info'][pkg_name] = git_info_copy
                 else:
                     git_data['local_packages_git_info'][pkg_name] = git_info
@@ -350,10 +351,9 @@ class CodeSnap:
         current_imported = get_imported_packages()
 
         # Check for version changes
-        for pkg_name, pkg_info in current_imported.items():
+        for pkg_name, new_version in current_imported.items():
             if pkg_name in self.imported_packages:
-                old_version = self.imported_packages[pkg_name].get('version')
-                new_version = pkg_info.get('version')
+                old_version = self.imported_packages[pkg_name]
 
                 # If both versions are available and different, raise error
                 if old_version and new_version and old_version != new_version:
@@ -527,7 +527,30 @@ class CodeSnap:
 
         return None
 
-    def dump(self, obj: Any = None, name: Optional[str] = None, step: Optional[int] = None, update_metadata: bool = True):
+    def _cleanup_dumps(self, var_name: str, keep_count: int):
+        """
+        Remove old dumps for a specific variable, keeping only the last keep_count dumps.
+
+        Args:
+            var_name: Variable name or subfolder identifier
+            keep_count: Number of dumps to keep for this variable
+        """
+        import shutil
+
+        if var_name not in self.dump_history:
+            return
+
+        history = self.dump_history[var_name]
+        while len(history) > keep_count:
+            old_folder = history.pop(0)
+            if old_folder.exists():
+                try:
+                    shutil.rmtree(old_folder)
+                except Exception as e:
+                    import warnings
+                    warnings.warn(f"Failed to remove old dump folder {old_folder}: {e}")
+
+    def dump(self, obj: Any = None, name: Optional[str] = None, step: Optional[int] = None, update_metadata: bool = True, mode: str = 'last', max_keep: int = 1):
         """
         Dump an object to disk.
 
@@ -545,6 +568,9 @@ class CodeSnap:
             step: Optional step/iteration number. If provided, data will be saved in "step_{step:06d}/" subfolder.
                   If not provided, uses the variable name or internal counter.
             update_metadata: Whether to check and update metadata if changed (default: True)
+            mode: Dump mode - 'all' (keep all dumps), 'last' (keep only the latest),
+                  or 'last_n' (keep the latest n dumps). Default: 'last'
+            max_keep: For 'last_n' mode, the number of dumps to keep. Default: 1
 
         Examples:
             # Auto-detect variable name
@@ -552,16 +578,25 @@ class CodeSnap:
             dumper.dump(ts1)
             # -> saves to: folder/ts1/ts1_rank0.pt
 
-            # Save loss at step 100
-            dumper.dump(loss, name="loss", step=100)
+            # Save loss at step 100, keep only the latest
+            dumper.dump(loss, name="loss", step=100, mode='last')
             # -> saves to: folder/step_000100/loss_rank0.pt
 
-            # Save multiple tensors at the same step
-            dumper.dump(loss, name="loss", step=100)
-            dumper.dump(grad, name="gradient", step=100)
-            # -> saves to: folder/step_000100/loss_rank0.pt
-            #              folder/step_000100/gradient_rank0.pt
+            # Save gradient, keep the latest 5
+            dumper.dump(grad, name="gradient", step=100, mode='last_n', max_keep=5)
+            # -> saves to: folder/step_000100/gradient_rank0.pt
+
+            # Save accuracy, keep all dumps
+            dumper.dump(accuracy, name="accuracy", step=100, mode='all')
+            # -> saves to: folder/step_000100/accuracy_rank0.pt
         """
+        # Validate mode
+        if mode not in ['all', 'last', 'last_n']:
+            raise ValueError(f"Invalid mode '{mode}'. Must be 'all', 'last', or 'last_n'")
+
+        # Ensure max_keep is at least 1
+        max_keep = max(1, max_keep)
+
         if not self.enabled:
             return
 
@@ -582,15 +617,53 @@ class CodeSnap:
             # Use user-provided step number
             subfolder_name = f"step_{step:06d}"
         else:
-            # Use variable name as subfolder if detected, otherwise use counter
-            if name != "data":
-                subfolder_name = name
+            # When mode='all' or 'last_n' and no step is provided, use counter to create unique folders
+            if mode in ['all', 'last_n']:
+                # Initialize counter for this variable if not exists
+                if name not in self.var_counters:
+                    self.var_counters[name] = 0
+
+                # Use variable name with counter
+                if name != "data":
+                    subfolder_name = f"{name}_{self.var_counters[name]:04d}"
+                else:
+                    subfolder_name = f"dump_{self.var_counters[name]:04d}"
+
+                # Increment counter for next dump
+                self.var_counters[name] += 1
             else:
-                subfolder_name = f"dump_{self.counter:04d}"
-                self.counter += 1
+                # For 'last' mode, use fixed variable name as subfolder (will be overwritten)
+                if name != "data":
+                    subfolder_name = name
+                else:
+                    subfolder_name = f"dump_{self.counter:04d}"
+                    self.counter += 1
 
         # Create subfolder for this dump
         dump_folder = self.folder / subfolder_name
+
+        # Initialize history tracking for this variable if not exists
+        if name not in self.dump_history:
+            self.dump_history[name] = []
+
+        # Check if this is a new dump point for this variable (different subfolder from last)
+        history = self.dump_history[name]
+        is_new_dump = (not history or history[-1] != dump_folder)
+
+        if is_new_dump:
+            # This is a new dump point for this variable, handle mode logic
+            if mode == 'last':
+                # Remove all previous dumps for this variable
+                self._cleanup_dumps(name, keep_count=0)
+            elif mode == 'last_n':
+                # Keep last n-1 dumps (will add the new one to make n total)
+                self._cleanup_dumps(name, keep_count=max_keep - 1)
+            # else: mode == 'all', no cleanup
+
+            # Track this new dump folder for this variable
+            self.dump_history[name].append(dump_folder)
+
+        # Create the dump folder (may already exist for same step/name)
         dump_folder.mkdir(parents=True, exist_ok=True)
 
         # Add rank suffix in distributed mode
@@ -616,38 +689,6 @@ class CodeSnap:
 
         # Serialize and save (silently, without logging)
         serializer.save(obj, filepath)
-
-        # Update symlink in latest_tensor folder
-        self._update_symlink(filepath, f"{filename}{ext}")
-
-    def _update_symlink(self, source_path: Path, link_name: str):
-        """
-        Create or update a symbolic link in the latest_tensor folder.
-
-        Args:
-            source_path: Path to the actual file
-            link_name: Name of the symlink (including extension)
-        """
-        # Lazy creation of latest_folder on first dump
-        if self.latest_folder is None:
-            self.latest_folder = self.folder / "latest_tensor"
-            self.latest_folder.mkdir(parents=True, exist_ok=True)
-
-        link_path = self.latest_folder / link_name
-
-        # Remove existing symlink if it exists
-        if link_path.exists() or link_path.is_symlink():
-            link_path.unlink()
-
-        # Create new symlink (relative path for portability)
-        try:
-            # Use relative path from latest_folder to source_path
-            relative_path = os.path.relpath(source_path, self.latest_folder)
-            link_path.symlink_to(relative_path)
-        except OSError as e:
-            # On some systems (like Windows without admin rights), symlinks may fail
-            import warnings
-            warnings.warn(f"Failed to create symlink: {e}")
 
     def _load_from_file(self, filepath):
         """

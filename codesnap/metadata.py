@@ -289,15 +289,31 @@ def collect_metadata() -> Dict[str, Any]:
             if not hasattr(module, '__file__') or module.__file__ is None:
                 continue
 
-            # Skip __main__ module (scripts being run directly)
-            if module_name == '__main__':
-                continue
-
             # Get module file path
             module_file = Path(module.__file__).resolve()
 
             # Get the top-level package name (e.g., 'codesnap' from 'codesnap.core')
             top_level_name = module_name.split('.')[0]
+
+            # For __main__ or __mp_main__ (multiprocessing), use a better name
+            # These are user scripts, and we want to track their git info
+            if top_level_name in ('__main__', '__mp_main__'):
+                # Try to get a better name from the git repo root directory
+                # First, find the git repo root
+                git_repo_root = None
+                current = module_file.parent
+                for _ in range(10):  # Check up to 10 levels up
+                    if (current / '.git').exists():
+                        git_repo_root = current
+                        break
+                    current = current.parent
+
+                # Use the git repo directory name as the package name
+                if git_repo_root:
+                    top_level_name = git_repo_root.name
+                else:
+                    # No git repo found, skip this module
+                    continue
 
             # Skip if already processed
             if top_level_name in metadata['local_packages']:
@@ -365,17 +381,17 @@ def collect_metadata() -> Dict[str, Any]:
     return metadata
 
 
-def get_imported_packages() -> Dict[str, Dict[str, Any]]:
+def get_imported_packages() -> Dict[str, Optional[str]]:
     """Get information about currently imported packages.
 
     Scans sys.modules to find all imported third-party packages (not built-in modules)
-    and collects their version and installation information.
+    and collects their version information.
 
     Includes packages even if they don't have version info (e.g., not installed via pip),
     but excludes Python standard library modules.
 
     Returns:
-        Dictionary mapping package names to their info (version, location, etc.)
+        Dictionary mapping package names to their versions (same format as all_packages)
     """
     import sys
 
@@ -390,8 +406,8 @@ def get_imported_packages() -> Dict[str, Dict[str, Any]]:
         if not hasattr(module, '__file__') or module.__file__ is None:
             continue
 
-        # Skip __main__ module
-        if module_name == '__main__':
+        # Skip __main__ and __mp_main__ modules (scripts being run directly or via multiprocessing)
+        if module_name == '__main__' or module_name == '__mp_main__':
             continue
 
         # Get top-level package name (e.g., 'numpy' from 'numpy.core.numeric')
@@ -447,11 +463,7 @@ def get_imported_packages() -> Dict[str, Dict[str, Any]]:
         # Try to get package version (may be None for non-pip-installed packages)
         version = get_package_version(top_level_name)
 
-        # Store package info (version can be None)
-        imported[top_level_name] = {
-            'name': top_level_name,
-            'version': version,
-            'location': location
-        }
+        # Store package version (same format as all_packages)
+        imported[top_level_name] = version
 
     return imported
