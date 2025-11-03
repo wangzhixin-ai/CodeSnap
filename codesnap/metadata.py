@@ -245,20 +245,10 @@ def collect_metadata() -> Dict[str, Any]:
         'python_version': sys.version,
         'platform': sys.platform,
         'all_packages': {},
-        'local_packages': {},
-        'project_git_info': None  # Current working directory git info
+        'local_packages': {}
     }
 
-    # Get current working directory git info
-    try:
-        cwd = Path.cwd()
-        project_git = get_git_info(cwd)
-        if project_git and 'error' not in project_git:
-            metadata['project_git_info'] = project_git
-    except Exception:
-        pass
-
-    # Get all installed packages with their versions and locations
+    # Get all installed packages with their versions (from pip/conda installs)
     try:
         for dist in importlib.metadata.distributions():
             package_name = dist.name
@@ -279,7 +269,6 @@ def collect_metadata() -> Dict[str, Any]:
                         location = str(dist.locate_file(first_file).parent)
 
             # Check if this is a local package
-            # IMPORTANT: Only add if not already in local_packages (to avoid overwriting with site-packages entry)
             if location and is_local_package(location) and package_name not in metadata['local_packages']:
                 # Collect detailed info including git info for local packages
                 package_info = get_package_info(package_name, location=location, version=version)
@@ -289,5 +278,88 @@ def collect_metadata() -> Dict[str, Any]:
     except Exception as e:
         # Fallback: record the error but continue
         metadata['all_packages'] = {'error': str(e)}
+
+    # Scan sys.modules to find packages loaded from PYTHONPATH or sys.path
+    # This catches packages not installed via pip (e.g., direct imports)
+    try:
+        processed_git_repos = {}  # Map git repo root -> package name to avoid duplicates
+
+        for module_name, module in sys.modules.items():
+            # Skip built-in modules and modules without __file__
+            if not hasattr(module, '__file__') or module.__file__ is None:
+                continue
+
+            # Skip __main__ module (scripts being run directly)
+            if module_name == '__main__':
+                continue
+
+            # Get module file path
+            module_file = Path(module.__file__).resolve()
+
+            # Get the top-level package name (e.g., 'codesnap' from 'codesnap.core')
+            top_level_name = module_name.split('.')[0]
+
+            # Skip if already processed
+            if top_level_name in metadata['local_packages']:
+                continue
+
+            # Get the package root directory
+            # For a module like codesnap/core.py, we want the parent directory containing codesnap/
+            if module_file.name == '__init__.py':
+                # This is a package directory, use its parent
+                package_root = module_file.parent
+            else:
+                # This is a module file, use its parent (the package directory)
+                package_root = module_file.parent
+
+            # For nested modules, go up to find the actual package root
+            # Keep going up while the parent contains __init__.py
+            while (package_root.parent / '__init__.py').exists():
+                package_root = package_root.parent
+
+            # Check if this is a local package (not in site-packages)
+            package_root_str = str(package_root)
+            if not is_local_package(package_root_str):
+                continue
+
+            # Get git repo root to avoid duplicate packages from same repo
+            git_info = get_git_info(package_root)
+            if not git_info or 'error' in git_info:
+                continue
+
+            # Find the git repo root
+            git_repo_root = package_root
+            current = package_root
+            for _ in range(10):  # Check up to 10 levels up
+                if (current / '.git').exists():
+                    git_repo_root = current
+                    break
+                current = current.parent
+
+            git_repo_root_str = str(git_repo_root)
+
+            # Check if we've already processed this git repo
+            if git_repo_root_str in processed_git_repos:
+                # Skip this package, we already have one from the same repo
+                continue
+
+            # Mark this git repo as processed
+            processed_git_repos[git_repo_root_str] = top_level_name
+
+            # Try to get version from importlib.metadata first
+            version = get_package_version(top_level_name)
+
+            # Add to local packages
+            metadata['local_packages'][top_level_name] = {
+                'name': top_level_name,
+                'installed': True,
+                'version': version or 'unknown',
+                'location': package_root_str,
+                'git_info': git_info
+            }
+
+    except Exception as e:
+        # Don't fail the entire metadata collection if sys.modules scan fails
+        pass
 
     return metadata

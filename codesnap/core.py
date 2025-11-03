@@ -263,26 +263,8 @@ class CodeSnap:
 
         # Prepare git_data and extract diffs to separate files
         git_data = {
-            'project_git_info': None,
             'local_packages_git_info': {}
         }
-
-        # Process project git info
-        project_git = current_metadata.get('project_git_info')
-        if project_git:
-            # Extract git_diff to separate file
-            git_diff = project_git.get('git_diff')
-            if git_diff:
-                diff_path = self.folder / "project.patch"
-                with open(diff_path, 'w') as f:
-                    f.write(git_diff)
-
-                # Store git info without the diff content
-                project_git_copy = project_git.copy()
-                project_git_copy['git_diff'] = f"See project.patch"
-                git_data['project_git_info'] = project_git_copy
-            else:
-                git_data['project_git_info'] = project_git
 
         # Extract git info from local packages
         for pkg_name, pkg_info in current_metadata.get('local_packages', {}).items():
@@ -325,7 +307,6 @@ class CodeSnap:
 
             # Check if git data has changed
             last_git = {
-                'project_git_info': self.last_metadata.get('project_git_info'),
                 'local_packages_git_info': {}
             }
             for pkg_name, pkg_info in self.last_metadata.get('local_packages', {}).items():
