@@ -415,6 +415,57 @@ class CodeSnap:
         """Disable dumping."""
         self.enabled = False
 
+    def _get_variable_name(self) -> Optional[str]:
+        """
+        Try to detect the variable name from the calling code.
+
+        This inspects the call stack to find the variable name used
+        in the dump() call.
+
+        Returns:
+            Variable name if detected, None otherwise
+        """
+        import inspect
+        import re
+
+        try:
+            # Get the caller's frame (skip _get_variable_name and dump)
+            frame = inspect.currentframe()
+            caller_frame = frame.f_back.f_back  # Skip dump() -> _get_variable_name()
+
+            if caller_frame is None:
+                return None
+
+            # Get the source code line that called dump()
+            filename = caller_frame.f_code.co_filename
+            lineno = caller_frame.f_lineno
+
+            # Read the source line
+            with open(filename, 'r') as f:
+                lines = f.readlines()
+                if lineno > 0 and lineno <= len(lines):
+                    source_line = lines[lineno - 1].strip()
+
+                    # Try to extract variable name from patterns like:
+                    # codesnap.dump(var_name)
+                    # dumper.dump(var_name)
+                    # self.dump(var_name)
+                    # dump(var_name)
+
+                    # Match: .dump(var_name) or dump(var_name)
+                    match = re.search(r'\.dump\s*\(\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*[,)]', source_line)
+                    if match:
+                        return match.group(1)
+
+                    match = re.search(r'^dump\s*\(\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*[,)]', source_line)
+                    if match:
+                        return match.group(1)
+        except:
+            # If anything fails, just return None
+            pass
+
+        return None
+
     def dump(self, obj: Any = None, name: Optional[str] = None, step: Optional[int] = None, update_metadata: bool = True):
         """
         Dump an object to disk.
@@ -428,12 +479,18 @@ class CodeSnap:
 
         Args:
             obj: Object to dump (torch.Tensor, numpy.ndarray, or any Python object)
-            name: Optional name for the dump file (default: "data")
+            name: Optional name for the dump file and subfolder. If not provided, will try to
+                  auto-detect the variable name from the calling code.
             step: Optional step/iteration number. If provided, data will be saved in "step_{step:06d}/" subfolder.
-                  If not provided, uses internal counter and saves in "dump_{counter:04d}/" subfolder.
+                  If not provided, uses the variable name or internal counter.
             update_metadata: Whether to check and update metadata if changed (default: True)
 
         Examples:
+            # Auto-detect variable name
+            ts1 = torch.tensor([1, 2, 3])
+            dumper.dump(ts1)
+            # -> saves to: folder/ts1/ts1_rank0.pt
+
             # Save loss at step 100
             dumper.dump(loss, name="loss", step=100)
             # -> saves to: folder/step_000100/loss_rank0.pt
@@ -443,10 +500,6 @@ class CodeSnap:
             dumper.dump(grad, name="gradient", step=100)
             # -> saves to: folder/step_000100/loss_rank0.pt
             #              folder/step_000100/gradient_rank0.pt
-
-            # Auto-increment mode (no step provided)
-            dumper.dump(loss, name="loss")
-            # -> saves to: folder/dump_0000/loss_rank0.pt
         """
         if not self.enabled:
             return
@@ -457,22 +510,27 @@ class CodeSnap:
         if obj is None:
             return
 
+        # Auto-detect variable name if name is not provided
+        if name is None:
+            name = self._get_variable_name()
+            if name is None:
+                name = "data"
+
         # Determine subfolder name
         if step is not None:
             # Use user-provided step number
             subfolder_name = f"step_{step:06d}"
         else:
-            # Use internal counter and auto-increment
-            subfolder_name = f"dump_{self.counter:04d}"
-            self.counter += 1
+            # Use variable name as subfolder if detected, otherwise use counter
+            if name != "data":
+                subfolder_name = name
+            else:
+                subfolder_name = f"dump_{self.counter:04d}"
+                self.counter += 1
 
         # Create subfolder for this dump
         dump_folder = self.folder / subfolder_name
         dump_folder.mkdir(parents=True, exist_ok=True)
-
-        # Generate filename
-        if name is None:
-            name = "data"
 
         # Add rank suffix in distributed mode
         if self.is_distributed and self.world_size > 1:
