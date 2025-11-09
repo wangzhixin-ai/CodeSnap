@@ -20,7 +20,7 @@ except ImportError:
         pytz = None
 
 from .registry import SerializerRegistry
-from .metadata import collect_metadata, get_imported_packages
+from .metadata import collect_metadata
 
 
 def _get_rank_info():
@@ -60,7 +60,6 @@ class CodeSnap:
         self.rank = 0
         self.world_size = 1
         self.is_distributed = False
-        self.imported_packages = {}  # Track imported packages and their versions
         self.dump_history = {}  # Track dump folders for each variable: {var_name: [folder1, folder2, ...]}
         self.var_counters = {}  # Track counter for each variable name
 
@@ -200,6 +199,10 @@ class CodeSnap:
         if self.folder is None:
             return
 
+        # Create metadata folder
+        metadata_folder = self.folder / "metadata"
+        metadata_folder.mkdir(exist_ok=True)
+
         # Get timezone-aware timestamp
         if ZoneInfo is not None:
             shanghai_tz = ZoneInfo('Asia/Shanghai')
@@ -221,7 +224,7 @@ class CodeSnap:
             'timestamp': timestamp
         }
 
-        runtime_path = self.folder / "runtime_info.json"
+        runtime_path = metadata_folder / "runtime_info.json"
         with open(runtime_path, 'w') as f:
             json.dump(runtime_info, f, indent=2)
 
@@ -240,8 +243,15 @@ class CodeSnap:
         if self.rank != 0:
             return
 
-        packages_path = self.folder / "packages.json"
-        git_info_path = self.folder / "git_info.json"
+        # Create metadata folder structure
+        metadata_folder = self.folder / "metadata"
+        metadata_folder.mkdir(exist_ok=True)
+
+        uncommitted_changes_folder = metadata_folder / "uncommitted_changes"
+        uncommitted_changes_folder.mkdir(exist_ok=True)
+
+        packages_path = metadata_folder / "packages.json"
+        git_info_path = metadata_folder / "git_info.json"
 
         # Collect current metadata
         current_metadata = collect_metadata()
@@ -250,15 +260,16 @@ class CodeSnap:
         packages_data = {
             'python_version': current_metadata.get('python_version'),
             'platform': current_metadata.get('platform'),
-            'all_packages': current_metadata.get('all_packages', {}),
+            'installed_packages': current_metadata.get('all_packages', {}),
             'local_packages': {}
         }
 
         # Extract package info (without git info) for local packages
         for pkg_name, pkg_info in current_metadata.get('local_packages', {}).items():
-            packages_data['local_packages'][pkg_name] = {
+            # Normalize package name to lowercase to avoid duplicate entries
+            normalized_pkg_name = pkg_name.lower()
+            packages_data['local_packages'][normalized_pkg_name] = {
                 'name': pkg_info.get('name'),
-                'installed': pkg_info.get('installed'),
                 'version': pkg_info.get('version'),
                 'location': pkg_info.get('location')
             }
@@ -272,19 +283,24 @@ class CodeSnap:
         for pkg_name, pkg_info in current_metadata.get('local_packages', {}).items():
             git_info = pkg_info.get('git_info')
             if git_info is not None:
+                # Normalize package name to lowercase to avoid duplicate entries
+                normalized_pkg_name = pkg_name.lower()
+
                 # Extract git_diff to separate file
                 git_diff = git_info.get('git_diff')
                 if git_diff:
-                    diff_path = self.folder / f"{pkg_name}.patch"
+                    # Normalize package name to lowercase to avoid duplicate files
+                    patch_filename = f"{normalized_pkg_name}.patch"
+                    diff_path = uncommitted_changes_folder / patch_filename
                     with open(diff_path, 'w') as f:
                         f.write(git_diff)
 
                     # Store git info without the diff content
                     git_info_copy = git_info.copy()
-                    git_info_copy['git_diff'] = f"See {pkg_name}.patch"
-                    git_data['local_packages_git_info'][pkg_name] = git_info_copy
+                    git_info_copy['git_diff'] = f"See metadata/uncommitted_changes/{patch_filename}"
+                    git_data['local_packages_git_info'][normalized_pkg_name] = git_info_copy
                 else:
-                    git_data['local_packages_git_info'][pkg_name] = git_info
+                    git_data['local_packages_git_info'][normalized_pkg_name] = git_info
 
         # First time initialization or force update
         if force or self.last_metadata is None:
@@ -295,13 +311,14 @@ class CodeSnap:
             last_packages = {
                 'python_version': self.last_metadata.get('python_version'),
                 'platform': self.last_metadata.get('platform'),
-                'all_packages': self.last_metadata.get('all_packages', {}),
+                'installed_packages': self.last_metadata.get('all_packages', {}),
                 'local_packages': {}
             }
             for pkg_name, pkg_info in self.last_metadata.get('local_packages', {}).items():
-                last_packages['local_packages'][pkg_name] = {
+                # Normalize package name to lowercase for consistency
+                normalized_pkg_name = pkg_name.lower()
+                last_packages['local_packages'][normalized_pkg_name] = {
                     'name': pkg_info.get('name'),
-                    'installed': pkg_info.get('installed'),
                     'version': pkg_info.get('version'),
                     'location': pkg_info.get('location')
                 }
@@ -314,14 +331,16 @@ class CodeSnap:
             for pkg_name, pkg_info in self.last_metadata.get('local_packages', {}).items():
                 git_info = pkg_info.get('git_info')
                 if git_info is not None:
-                    last_git['local_packages_git_info'][pkg_name] = git_info
+                    # Normalize package name to lowercase for consistency
+                    normalized_pkg_name = pkg_name.lower()
+                    last_git['local_packages_git_info'][normalized_pkg_name] = git_info
             git_changed = (git_data != last_git)
 
         # Save packages data if changed
         if packages_changed:
-            # Sort all_packages alphabetically before saving
-            if 'all_packages' in packages_data and isinstance(packages_data['all_packages'], dict):
-                packages_data['all_packages'] = dict(sorted(packages_data['all_packages'].items()))
+            # Sort installed_packages alphabetically before saving
+            if 'installed_packages' in packages_data and isinstance(packages_data['installed_packages'], dict):
+                packages_data['installed_packages'] = dict(sorted(packages_data['installed_packages'].items()))
 
             with open(packages_path, 'w') as f:
                 json.dump(packages_data, f, indent=2)
@@ -333,65 +352,6 @@ class CodeSnap:
 
         # Cache current metadata
         self.last_metadata = current_metadata
-
-    def _check_and_update_imported_packages(self):
-        """Check and update imported packages information.
-
-        Raises:
-            RuntimeError: If a package version has changed since the last dump
-        """
-        if self.folder is None:
-            return
-
-        # Only rank 0 updates the file
-        if self.rank != 0:
-            return
-
-        # Get currently imported packages
-        current_imported = get_imported_packages()
-
-        # Check for version changes
-        for pkg_name, new_version in current_imported.items():
-            if pkg_name in self.imported_packages:
-                old_version = self.imported_packages[pkg_name]
-
-                # If both versions are available and different, raise error
-                if old_version and new_version and old_version != new_version:
-                    raise RuntimeError(
-                        f"Package '{pkg_name}' version changed from {old_version} to {new_version}. "
-                        f"This may cause reproducibility issues. Please restart the program."
-                    )
-
-        # Update imported_packages tracker
-        self.imported_packages.update(current_imported)
-
-        # Update packages.json file
-        packages_path = self.folder / "packages.json"
-
-        # Load existing packages.json if it exists
-        if packages_path.exists():
-            with open(packages_path, 'r') as f:
-                packages_data = json.load(f)
-        else:
-            packages_data = {
-                'python_version': None,
-                'platform': None,
-                'all_packages': {},
-                'local_packages': {}
-            }
-
-        # Update the imported_packages field
-        packages_data['imported_packages'] = self.imported_packages
-
-        # Sort all_packages and imported_packages alphabetically
-        if 'all_packages' in packages_data and isinstance(packages_data['all_packages'], dict):
-            packages_data['all_packages'] = dict(sorted(packages_data['all_packages'].items()))
-
-        packages_data['imported_packages'] = dict(sorted(packages_data['imported_packages'].items()))
-
-        # Write back to file
-        with open(packages_path, 'w') as f:
-            json.dump(packages_data, f, indent=2)
 
     def _metadata_equal(self, meta1: dict, meta2: dict) -> bool:
         """Check if two metadata dictionaries are equal (ignoring minor differences)."""
@@ -675,10 +635,6 @@ class CodeSnap:
         # Update metadata if there are changes (only rank 0)
         if update_metadata and self.rank == 0:
             self._update_metadata()
-
-        # Check and update imported packages (only rank 0)
-        if self.rank == 0:
-            self._check_and_update_imported_packages()
 
         # Get serializer for this object type
         serializer = self.registry.get_serializer(obj)
