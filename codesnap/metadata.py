@@ -5,11 +5,11 @@ Metadata collection for packages.
 import sys
 import subprocess
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Any
 import importlib.metadata
 
 
-def get_package_version(package_name: str) -> Optional[str]:
+def get_package_version(package_name: str) -> str | None:
     """Get version of an installed package."""
     try:
         return importlib.metadata.version(package_name)
@@ -17,7 +17,7 @@ def get_package_version(package_name: str) -> Optional[str]:
         return None
 
 
-def get_git_info(package_path: Path, max_log_entries: int = 50) -> Optional[Dict[str, Any]]:
+def get_git_info(package_path: Path, max_log_entries: int = 50) -> dict[str, Any] | None:
     """Get git information for a local package.
 
     Args:
@@ -143,7 +143,7 @@ def is_local_package(location: str) -> bool:
     return True
 
 
-def get_editable_install_location(dist) -> Optional[str]:
+def get_editable_install_location(dist) -> str | None:
     """Get the actual source location for an editable install.
 
     For editable installs, the distribution files are in site-packages,
@@ -197,7 +197,7 @@ def get_editable_install_location(dist) -> Optional[str]:
         return None
 
 
-def get_package_info(package_name: str, location: Optional[str] = None, version: Optional[str] = None) -> Dict[str, Any]:
+def get_package_info(package_name: str, location: str | None = None, version: str | None = None) -> dict[str, Any]:
     """Get complete information about a package.
 
     Args:
@@ -239,7 +239,7 @@ def get_package_info(package_name: str, location: Optional[str] = None, version:
     return info
 
 
-def collect_metadata() -> Dict[str, Any]:
+def collect_metadata() -> dict[str, Any]:
     """Collect metadata about the environment and all installed packages."""
     metadata = {
         'python_version': sys.version,
@@ -381,7 +381,7 @@ def collect_metadata() -> Dict[str, Any]:
     return metadata
 
 
-def get_imported_packages() -> Dict[str, Optional[str]]:
+def get_imported_packages() -> dict[str, str | None]:
     """Get information about currently imported packages.
 
     Scans sys.modules to find all imported third-party packages (not built-in modules)

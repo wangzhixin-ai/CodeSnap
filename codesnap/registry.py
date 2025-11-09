@@ -2,7 +2,7 @@
 Registry system for serializers and comparators.
 """
 
-from typing import Any, Dict
+from typing import Any
 from abc import ABC, abstractmethod
 
 
@@ -38,9 +38,9 @@ class SerializerRegistry:
     """Registry for serializers and comparators."""
 
     def __init__(self):
-        self._serializers: Dict[str, Serializer] = {}
-        self._comparators: Dict[str, Comparator] = {}
-        self._extension_serializers: Dict[str, Serializer] = {}  # Extension -> Serializer mapping
+        self._serializers: dict[str, Serializer] = {}
+        self._comparators: dict[str, Comparator] = {}
+        self._extension_serializers: dict[str, Serializer] = {}  # Extension -> Serializer mapping
         self._register_defaults()
 
     def _register_defaults(self):

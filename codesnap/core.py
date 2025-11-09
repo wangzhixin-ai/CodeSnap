@@ -6,7 +6,7 @@ import json
 import sys
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from datetime import datetime
 try:
     from zoneinfo import ZoneInfo
@@ -52,7 +52,7 @@ class CodeSnap:
     """Main dumper class that handles initialization and dumping."""
 
     def __init__(self):
-        self.folder: Optional[Path] = None
+        self.folder: Path | None = None
         self.enabled = True
         self.registry = SerializerRegistry()
         self.counter = 0
@@ -118,7 +118,7 @@ class CodeSnap:
         if self.is_distributed:
             self._barrier()
 
-    def _broadcast_timestamp(self, timestamp: Optional[str]) -> str:
+    def _broadcast_timestamp(self, timestamp: str | None) -> str:
         """
         Broadcast timestamp from rank 0 to all other ranks.
 
@@ -476,7 +476,7 @@ class CodeSnap:
         """Disable dumping."""
         self.enabled = False
 
-    def _get_variable_name(self) -> Optional[str]:
+    def _get_variable_name(self) -> str | None:
         """
         Try to detect the variable name from the calling code.
 
@@ -550,7 +550,7 @@ class CodeSnap:
                     import warnings
                     warnings.warn(f"Failed to remove old dump folder {old_folder}: {e}")
 
-    def dump(self, obj: Any = None, name: Optional[str] = None, step: Optional[int] = None, update_metadata: bool = True, mode: str = 'last', max_keep: int = 1):
+    def dump(self, obj: Any = None, name: str | None = None, step: int | None = None, update_metadata: bool = True, mode: str = 'last', max_keep: int = 1):
         """
         Dump an object to disk.
 
