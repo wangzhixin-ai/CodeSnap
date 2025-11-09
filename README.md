@@ -1,6 +1,6 @@
 # CodeSnap
 
-[![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A comprehensive debugging tool for machine learning and deep learning development. CodeSnap helps you save, compare, and track tensors, arrays, and other Python objects with complete reproducibility.
@@ -17,13 +17,18 @@ When debugging ML/DL models, you need to save intermediate outputs, compare runs
 - Multi-format support: PyTorch tensors (`.pt`), NumPy arrays (`.npy`), Python objects (`.pkl`)
 - Distributed training: Single shared folder, rank-aware file naming, metadata saved by rank 0 only
 - Smart comparison: Cross-format comparison with automatic type conversion and tolerance-based matching
-- Complete reproducibility: Git commits, uncommitted changes, package versions, runtime environment
-- Flexible organization: Step-based or auto-increment dump folders, timestamped run directories
+- Complete reproducibility: Git commits, uncommitted changes (as .patch files), package versions, runtime environment
+- Flexible organization: Step-based or auto-increment dump folders, timestamped run directories, organized metadata structure
+- Dump modes: Keep all dumps, keep only the latest, or keep the latest N dumps with automatic cleanup
 
 ## Installation
 
+### From GitHub (Direct Install)
+```bash
+pip install git+https://github.com/wangzhixin-ai/CodeSnap.git
+```
 
-### From Source
+### From Source (Development)
 ```bash
 git clone https://github.com/wangzhixin-ai/CodeSnap.git
 cd CodeSnap
@@ -98,29 +103,37 @@ Each run creates a timestamped directory with organized subfolders for each dump
 
 ```
 experiments/
-└── 20251028_143041/              # Timestamp: YYYYMMDD_HHMMSS (Shanghai timezone)
-    ├── runtime_info.json         # Command, environment variables, working directory
-    ├── packages.json             # Python version, all installed packages
-    ├── git_info.json             # Git commit, logs, runtime modifications
-    ├── project.patch             # Git diff of current project (uncommitted changes)
-    ├── step_000100/              # Step-based dump (when step parameter is provided)
+└── 20251028_143041/                      # Timestamp: YYYYMMDD_HHMMSS (local timezone)
+    ├── metadata/                         # Organized metadata folder
+    │   ├── runtime_info.json             # Command, environment variables, working directory
+    │   ├── packages.json                 # Python version, all installed packages
+    │   ├── git_info.json                 # Git commit, logs for local packages
+    │   └── uncommitted_changes/          # Git diffs for each package
+    │       ├── codesnap.patch            # Uncommitted changes for codesnap package
+    │       └── other_package.patch       # Uncommitted changes for other local packages
+    ├── step_000100/                      # Step-based dump (when step parameter is provided)
     │   ├── loss_rank0.pt
     │   ├── loss_rank1.pt
     │   ├── gradient_rank0.pt
     │   └── gradient_rank1.pt
-    ├── step_000200/              # Next step
+    ├── step_000200/                      # Next step
     │   ├── loss_rank0.pt
     │   └── ...
-    ├── dump_0000/                # Auto-increment dump (when step is not provided)
-    │   ├── data_rank0.pt
-    │   └── data_rank1.pt
-    └── dump_0001/                # Next auto-increment dump
-        └── ...
+    ├── loss_0000/                        # Variable-based dump with counter (mode='all' or 'last_n')
+    │   └── loss_rank0.pt
+    ├── loss_0001/                        # Next dump for the same variable
+    │   └── loss_rank0.pt
+    ├── gradient/                         # Fixed name dump (mode='last', default)
+    │   └── gradient_rank0.pt
+    └── dump_0000/                        # Auto-increment when variable name not detected
+        └── data_rank0.pt
 ```
 
 **Directory naming:**
 - `step_{step:06d}/`: When you provide a `step` parameter to `dump()`
-- `dump_{counter:04d}/`: Auto-increment when no `step` is provided
+- `{name}_{counter:04d}/`: When `mode='all'` or `mode='last_n'` without step parameter
+- `{name}/`: When `mode='last'` (default) without step parameter - always overwrites
+- `dump_{counter:04d}/`: When variable name cannot be detected
 - Files include rank suffix in distributed mode: `{name}_rank{N}.{ext}`
 
 
@@ -144,19 +157,38 @@ Initialize the dumper. Creates a timestamped subdirectory and saves environment 
 ### Dumping Data
 
 ```python
-codesnap.dump(obj, name=None, update_metadata=True)
+codesnap.dump(obj, name=None, step=None, update_metadata=True, mode='last', max_keep=1)
 ```
 Dump an object to disk.
 
 **Parameters:**
 - `obj` (Any): Object to dump (tensor, array, or any Python object)
-- `name` (str, optional): Name for the file. Auto-generated if None
+- `name` (str, optional): Name for the file. If None, auto-detects variable name from calling code
+- `step` (int, optional): Step/iteration number. Creates `step_{step:06d}/` subfolder if provided
 - `update_metadata` (bool): Whether to check and update metadata (default: True)
+- `mode` (str): Dump mode - `'last'` (keep only latest, default), `'all'` (keep all), or `'last_n'` (keep latest N)
+- `max_keep` (int): For `mode='last_n'`, number of dumps to keep (default: 1)
 
 **Supported Types:**
 - PyTorch tensors → `.pt` files
 - NumPy arrays → `.npy` files
 - Python objects → `.pkl` files
+
+**Examples:**
+```python
+# Auto-detect variable name, keep only the latest (overwrites previous)
+loss = torch.tensor(0.5)
+codesnap.dump(loss)  # Saves to: {timestamp}/loss/loss_rank0.pt
+
+# Keep all dumps with counter
+codesnap.dump(loss, mode='all')  # Saves to: {timestamp}/loss_0000/, loss_0001/, ...
+
+# Keep latest 5 dumps
+codesnap.dump(gradient, mode='last_n', max_keep=5)
+
+# Step-based organization
+codesnap.dump(loss, name="loss", step=100)  # Saves to: {timestamp}/step_000100/loss_rank0.pt
+```
 
 ### Comparing Data
 
