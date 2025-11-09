@@ -8,19 +8,54 @@ import os
 from pathlib import Path
 from typing import Any
 from datetime import datetime
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:
-    # For Python < 3.9, use pytz as fallback
-    try:
-        import pytz
-        ZoneInfo = None
-    except ImportError:
-        ZoneInfo = None
-        pytz = None
+from zoneinfo import ZoneInfo
 
 from .registry import SerializerRegistry
 from .metadata import collect_metadata
+
+
+def _get_local_timezone():
+    """
+    Get the local system timezone from the system configuration.
+
+    Returns:
+        ZoneInfo: ZoneInfo timezone object for local time, or None as fallback
+    """
+    try:
+        # Method 1: Try TZ environment variable
+        tz_name = os.environ.get('TZ')
+        if tz_name:
+            try:
+                return ZoneInfo(tz_name)
+            except Exception:
+                pass
+
+        # Method 2: Try reading /etc/timezone (Debian/Ubuntu)
+        if os.path.exists('/etc/timezone'):
+            with open('/etc/timezone', 'r') as f:
+                tz_name = f.read().strip()
+                if tz_name:
+                    try:
+                        return ZoneInfo(tz_name)
+                    except Exception:
+                        pass
+
+        # Method 3: Try reading /etc/localtime symlink (RHEL/CentOS/Fedora)
+        if os.path.islink('/etc/localtime'):
+            link_target = os.readlink('/etc/localtime')
+            # Extract timezone name from path like /usr/share/zoneinfo/Asia/Shanghai
+            if '/zoneinfo/' in link_target:
+                tz_name = link_target.split('/zoneinfo/')[-1]
+                try:
+                    return ZoneInfo(tz_name)
+                except Exception:
+                    pass
+
+    except Exception:
+        pass
+
+    # If all methods fail, return None (will use naive local time)
+    return None
 
 
 def _get_rank_info():
@@ -81,16 +116,11 @@ class CodeSnap:
 
         # Generate timestamp (only rank 0 creates it, others will receive it)
         if self.rank == 0:
-            if ZoneInfo is not None:
-                # Python 3.9+
-                shanghai_tz = ZoneInfo('Asia/Shanghai')
-                timestamp = datetime.now(shanghai_tz).strftime('%Y%m%d_%H%M%S')
-            elif pytz is not None:
-                # Python < 3.9 with pytz
-                shanghai_tz = pytz.timezone('Asia/Shanghai')
-                timestamp = datetime.now(shanghai_tz).strftime('%Y%m%d_%H%M%S')
+            local_tz = _get_local_timezone()
+            if local_tz is not None:
+                timestamp = datetime.now(local_tz).strftime('%Y%m%d_%H%M%S')
             else:
-                # Fallback: use local time
+                # Fallback: use naive local time
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         else:
             timestamp = None
@@ -165,12 +195,9 @@ class CodeSnap:
         if timestamp is None:
             import time
             time.sleep(0.1 * self.rank)  # Small delay to avoid race conditions
-            if ZoneInfo is not None:
-                shanghai_tz = ZoneInfo('Asia/Shanghai')
-                timestamp = datetime.now(shanghai_tz).strftime('%Y%m%d_%H%M%S')
-            elif pytz is not None:
-                shanghai_tz = pytz.timezone('Asia/Shanghai')
-                timestamp = datetime.now(shanghai_tz).strftime('%Y%m%d_%H%M%S')
+            local_tz = _get_local_timezone()
+            if local_tz is not None:
+                timestamp = datetime.now(local_tz).strftime('%Y%m%d_%H%M%S')
             else:
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
@@ -204,12 +231,9 @@ class CodeSnap:
         metadata_folder.mkdir(exist_ok=True)
 
         # Get timezone-aware timestamp
-        if ZoneInfo is not None:
-            shanghai_tz = ZoneInfo('Asia/Shanghai')
-            timestamp = datetime.now(shanghai_tz).isoformat()
-        elif pytz is not None:
-            shanghai_tz = pytz.timezone('Asia/Shanghai')
-            timestamp = datetime.now(shanghai_tz).isoformat()
+        local_tz = _get_local_timezone()
+        if local_tz is not None:
+            timestamp = datetime.now(local_tz).isoformat()
         else:
             timestamp = datetime.now().isoformat()
 
