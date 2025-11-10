@@ -1,5 +1,17 @@
-"""
-Metadata collection for packages.
+"""Metadata collection for packages and environment tracking.
+
+This module collects comprehensive environment information for reproducibility:
+- Python version and platform
+- All installed packages with versions
+- Local/editable packages with git information
+- Git commits, branches, and uncommitted changes
+- Package installation locations
+
+Key functions:
+- collect_metadata(): Main entry point for collecting all metadata
+- get_git_info(): Get git information for a package directory
+- get_package_info(): Get comprehensive information about a package
+- is_local_package(): Check if a package is installed locally (not from PyPI)
 """
 
 import sys
@@ -10,7 +22,14 @@ import importlib.metadata
 
 
 def get_package_version(package_name: str) -> str | None:
-    """Get version of an installed package."""
+    """Get version of an installed package using importlib.metadata.
+
+    Args:
+        package_name: Name of the package (e.g., "numpy", "torch")
+
+    Returns:
+        str | None: Version string if found, None if package not found
+    """
     try:
         return importlib.metadata.version(package_name)
     except importlib.metadata.PackageNotFoundError:
@@ -18,11 +37,29 @@ def get_package_version(package_name: str) -> str | None:
 
 
 def get_git_info(package_path: Path, max_log_entries: int = 50) -> dict[str, Any] | None:
-    """Get git information for a local package.
+    """Get git information for a local package directory.
+
+    Collects comprehensive git state including:
+    - Current commit ID and branch
+    - Repository status (clean/dirty)
+    - Recent commit history with author and date
+    - Uncommitted changes (git diff)
+
+    Searches up to 5 parent directories to find .git folder if not in package_path.
 
     Args:
-        package_path: Path to the package directory
-        max_log_entries: Maximum number of git log entries to save (default: 50)
+        package_path: Path to the package directory to inspect
+        max_log_entries: Maximum number of git log entries to collect (default: 50)
+
+    Returns:
+        dict | None: Git information dictionary with keys:
+            - commit_id: Current commit hash
+            - branch: Current branch name
+            - is_dirty: Whether there are uncommitted changes (bool)
+            - git_log: List of recent commits with author, date, message
+            - git_diff: Diff of uncommitted changes
+            - log_entries_count: Number of log entries collected
+        Returns None if not a git repository or on error.
     """
     try:
         # Check if it's a git repo
@@ -111,7 +148,6 @@ def get_git_info(package_path: Path, max_log_entries: int = 50) -> dict[str, Any
             'commit_id': commit_id,
             'branch': branch,
             'is_dirty': is_dirty,
-            'status': 'dirty' if is_dirty else 'clean',
             'git_log': git_log,
             'git_diff': git_diff,
             'log_entries_count': len(git_log)
@@ -124,11 +160,17 @@ def get_git_info(package_path: Path, max_log_entries: int = 50) -> dict[str, Any
 def is_local_package(location: str) -> bool:
     """Check if a package is installed locally (not from PyPI).
 
+    A package is considered "local" if it's NOT installed in standard
+    site-packages or dist-packages directories, indicating it's either:
+    - An editable install (pip install -e)
+    - Installed from a local path
+    - Added to PYTHONPATH
+
     Args:
-        location: Package installation location
+        location: Package installation location path
 
     Returns:
-        True if package is installed locally (editable install or local path)
+        bool: True if package is local, False if from PyPI/conda
     """
     if not location:
         return False
@@ -146,16 +188,16 @@ def is_local_package(location: str) -> bool:
 def get_editable_install_location(dist) -> str | None:
     """Get the actual source location for an editable install.
 
-    For editable installs, the distribution files are in site-packages,
-    but we want the actual source location. This function checks:
-    1. direct_url.json for the source path
-    2. .pth file content (for older style editable installs)
+    For editable installs (pip install -e), the distribution files are in
+    site-packages, but we want the actual source location. This function checks:
+    1. direct_url.json for the source path (modern PEP 660 style)
+    2. .pth file content (older style editable installs)
 
     Args:
-        dist: Distribution object
+        dist: Distribution object from importlib.metadata
 
     Returns:
-        Actual source location if found, None otherwise
+        str | None: Actual source location if found, None if not editable or not found
     """
     try:
         # Method 1: Check direct_url.json (modern editable installs)
@@ -198,12 +240,25 @@ def get_editable_install_location(dist) -> str | None:
 
 
 def get_package_info(package_name: str, location: str | None = None, version: str | None = None) -> dict[str, Any]:
-    """Get complete information about a package.
+    """Get complete information about a package including git state.
+
+    Collects:
+    - Package name, version, and installation location
+    - Whether the package can be imported
+    - Git information if it's a local package
 
     Args:
-        package_name: Name of the package
-        location: Optional pre-fetched location
-        version: Optional pre-fetched version
+        package_name: Name of the package (e.g., "numpy", "codesnap")
+        location: Optional pre-fetched location (to avoid redundant lookups)
+        version: Optional pre-fetched version (to avoid redundant lookups)
+
+    Returns:
+        dict: Package information with keys:
+            - name: Package name
+            - installed: Whether package can be imported
+            - version: Version string or None
+            - location: Installation location or None
+            - git_info: Git information dict or None (only for local packages)
     """
     info = {
         'name': package_name,
@@ -240,7 +295,29 @@ def get_package_info(package_name: str, location: str | None = None, version: st
 
 
 def collect_metadata() -> dict[str, Any]:
-    """Collect metadata about the environment and all installed packages."""
+    """Collect comprehensive metadata about the environment and all installed packages.
+
+    This is the main entry point for metadata collection. It gathers:
+    - Python version and platform
+    - All installed packages from pip/conda (with versions)
+    - Local/editable packages (with git information)
+    - Packages loaded via PYTHONPATH or sys.path
+    - Git state for all local packages (commits, branches, diffs)
+
+    The function scans two sources:
+    1. importlib.metadata.distributions() - packages installed via pip/conda
+    2. sys.modules - packages loaded from PYTHONPATH or direct imports
+
+    Duplicate packages (same git repo) are automatically deduplicated.
+
+    Returns:
+        dict: Metadata dictionary with keys:
+            - python_version: Python version string
+            - platform: Platform identifier (e.g., "linux", "darwin")
+            - all_packages: Dict mapping package names to version strings
+            - local_packages: Dict mapping package names to detailed info dicts
+                Each local package info contains: name, version, location, git_info
+    """
     metadata = {
         'python_version': sys.version,
         'platform': sys.platform,
@@ -382,16 +459,27 @@ def collect_metadata() -> dict[str, Any]:
 
 
 def get_imported_packages() -> dict[str, str | None]:
-    """Get information about currently imported packages.
+    """Get information about currently imported packages from sys.modules.
 
     Scans sys.modules to find all imported third-party packages (not built-in modules)
-    and collects their version information.
+    and collects their version information. This is useful for tracking which packages
+    are actually being used in the current session, not just installed.
 
-    Includes packages even if they don't have version info (e.g., not installed via pip),
-    but excludes Python standard library modules.
+    Filters out:
+    - Python standard library modules
+    - Built-in modules (without __file__)
+    - __main__ and __mp_main__ modules
+    - Internal/private modules (starting with _)
+
+    Includes packages even if they don't have version info (e.g., not installed via pip).
 
     Returns:
-        Dictionary mapping package names to their versions (same format as all_packages)
+        dict: Dictionary mapping package names to their versions (same format as all_packages).
+            Version is None for packages without version info.
+
+    Note:
+        This function is provided for potential future use but is not currently
+        called by collect_metadata().
     """
     import sys
 

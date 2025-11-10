@@ -84,7 +84,26 @@ def _get_rank_info():
 
 
 class CodeSnap:
-    """Main dumper class that handles initialization and dumping."""
+    """Main dumper class that handles initialization and dumping.
+
+    This class provides a comprehensive debugging tool for ML/DL development with:
+    - Automatic serialization of tensors, arrays, and Python objects
+    - Complete reproducibility tracking (git info, packages, runtime environment)
+    - Support for distributed training (multi-GPU/multi-node)
+    - Flexible dump modes (keep all, keep last, keep last N)
+
+    Attributes:
+        folder: Output directory for current session (with timestamp)
+        enabled: Whether dumping is currently enabled
+        registry: SerializerRegistry for handling different object types
+        counter: Global counter for auto-generated dump folder names
+        last_metadata: Cached metadata to detect changes
+        rank: Process rank in distributed training (0 for single-process)
+        world_size: Total number of processes in distributed training
+        is_distributed: Whether running in distributed training mode
+        dump_history: Dict tracking dump folders for each variable
+        var_counters: Dict tracking counters for each variable name
+    """
 
     def __init__(self):
         self.folder: Path | None = None
@@ -101,11 +120,21 @@ class CodeSnap:
     def init(self, folder_name: str):
         """Initialize the dumper with output folder.
 
-        In distributed training, only rank 0 will create the folder and save metadata.
-        Other ranks will use the same folder path.
+        Creates a timestamped subfolder under the specified base directory.
+        In distributed training, only rank 0 creates the folder and saves metadata,
+        while all ranks use the same folder path after timestamp synchronization.
+
+        The timestamp uses local timezone (detected from TZ env var, /etc/timezone,
+        or /etc/localtime), falling back to naive local time if detection fails.
 
         Args:
-            folder_name: Base directory for dumps
+            folder_name: Base directory for dumps. A timestamped subfolder will be
+                created inside (e.g., "experiments/20251110_143041/")
+
+        Examples:
+            >>> import codesnap
+            >>> codesnap.init("experiments")
+            [CodeSnap] Initialized. Output: experiments/20251110_143041/
         """
         # Get distributed training info
         self.rank, self.world_size, self.is_distributed = _get_rank_info()
@@ -148,14 +177,19 @@ class CodeSnap:
             self._barrier()
 
     def _broadcast_timestamp(self, timestamp: str | None) -> str:
-        """
-        Broadcast timestamp from rank 0 to all other ranks.
+        """Broadcast timestamp from rank 0 to all other ranks.
+
+        Ensures all ranks use the same timestamp for consistent folder naming
+        in distributed training. Uses torch.distributed for synchronization.
+
+        If torch.distributed is not available or fails, falls back to generating
+        a timestamp on each rank with a small delay to reduce race conditions.
 
         Args:
-            timestamp: Timestamp string (only valid on rank 0)
+            timestamp: Timestamp string from rank 0, None for other ranks
 
         Returns:
-            Broadcasted timestamp string
+            str: Synchronized timestamp string that all ranks will use
         """
         try:
             import torch
@@ -204,7 +238,13 @@ class CodeSnap:
         return timestamp
 
     def _barrier(self):
-        """Synchronization barrier for distributed training."""
+        """Synchronization barrier for distributed training.
+
+        Ensures all processes reach this point before any proceed. Uses
+        torch.distributed.barrier() with proper device handling for NCCL backend.
+
+        Falls back to a small sleep delay if torch.distributed is not available.
+        """
         try:
             import torch
             import torch.distributed as dist
@@ -222,7 +262,17 @@ class CodeSnap:
             time.sleep(0.5)  # Small delay to reduce race conditions
 
     def _save_runtime_info(self):
-        """Save runtime information (command, environment variables)."""
+        """Save runtime information to metadata folder.
+
+        Captures and saves:
+        - Command-line arguments (sys.argv)
+        - Python executable path
+        - Environment variables
+        - Working directory
+        - Timestamp
+
+        Saved to: {output_folder}/metadata/runtime_info.json
+        """
         if self.folder is None:
             return
 
@@ -255,10 +305,19 @@ class CodeSnap:
     def _update_metadata(self, force: bool = False):
         """Update metadata if changed.
 
+        Collects current environment metadata (packages, git info) and saves
+        to JSON files only if changes are detected compared to cached metadata.
+        This minimizes expensive git operations.
+
         In distributed training, only rank 0 updates metadata.
 
+        Saves:
+        - metadata/packages.json: Python version, installed packages, local packages info
+        - metadata/git_info.json: Git information for local packages
+        - metadata/uncommitted_changes/{package_name}.patch: Git diffs for local packages
+
         Args:
-            force: If True, update metadata even if unchanged
+            force: If True, update metadata even if unchanged (default: False)
         """
         if self.folder is None:
             return
@@ -378,7 +437,23 @@ class CodeSnap:
         self.last_metadata = current_metadata
 
     def _metadata_equal(self, meta1: dict, meta2: dict) -> bool:
-        """Check if two metadata dictionaries are equal (ignoring minor differences)."""
+        """Check if two metadata dictionaries are equal.
+
+        Compares critical fields to detect meaningful changes:
+        - Python version and platform
+        - All installed packages
+        - Project and package git information (commits, diffs, branches)
+        - Runtime modifications
+
+        Minor differences that don't affect reproducibility are ignored.
+
+        Args:
+            meta1: First metadata dictionary
+            meta2: Second metadata dictionary
+
+        Returns:
+            bool: True if metadata are effectively equal, False otherwise
+        """
         # Compare critical fields
         if meta1.get('python_version') != meta2.get('python_version'):
             return False
@@ -445,7 +520,17 @@ class CodeSnap:
     def update_metadata(self):
         """Manually update metadata (check for changes and save if different).
 
+        Forces a check of current environment state (packages, git info) and
+        saves to JSON files if changes are detected. Useful when you know the
+        environment has changed (e.g., after installing packages or committing code).
+
         In distributed training, only rank 0 updates metadata.
+
+        Examples:
+            >>> import codesnap
+            >>> # ... install some packages or commit code changes ...
+            >>> codesnap.update_metadata()
+            [CodeSnap] Metadata updated.
         """
         if self.rank == 0:
             self._update_metadata()
@@ -453,22 +538,47 @@ class CodeSnap:
         # Other ranks stay silent
 
     def enable(self):
-        """Enable dumping."""
+        """Enable dumping.
+
+        After calling this, dump() will save objects to disk.
+
+        Examples:
+            >>> import codesnap
+            >>> codesnap.disable()  # Temporarily stop dumping
+            >>> # ... some code ...
+            >>> codesnap.enable()   # Resume dumping
+        """
         self.enabled = True
 
     def disable(self):
-        """Disable dumping."""
+        """Disable dumping.
+
+        After calling this, dump() will do nothing (skip saving).
+        Useful for temporarily disabling dumps without removing dump() calls.
+
+        Examples:
+            >>> import codesnap
+            >>> codesnap.disable()
+            >>> codesnap.dump(tensor)  # This will not save anything
+        """
         self.enabled = False
 
     def _get_variable_name(self) -> str | None:
-        """
-        Try to detect the variable name from the calling code.
+        """Try to detect the variable name from the calling code.
 
-        This inspects the call stack to find the variable name used
-        in the dump() call.
+        Inspects the call stack to find the variable name used in the dump() call.
+        Supports patterns like:
+        - codesnap.dump(var_name)
+        - dumper.dump(var_name)
+        - self.dump(var_name)
+        - dump(var_name)
 
         Returns:
-            Variable name if detected, None otherwise
+            str | None: Variable name if detected, None if detection fails
+
+        Note:
+            This is a best-effort feature. Complex expressions (e.g., dump(obj.attr))
+            may not be detected correctly.
         """
         import inspect
         import re
@@ -512,12 +622,14 @@ class CodeSnap:
         return None
 
     def _cleanup_dumps(self, var_name: str, keep_count: int):
-        """
-        Remove old dumps for a specific variable, keeping only the last keep_count dumps.
+        """Remove old dumps for a specific variable, keeping only the last keep_count dumps.
+
+        Used internally by dump() to implement 'last' and 'last_n' modes.
+        Removes entire dump folders from the filesystem.
 
         Args:
             var_name: Variable name or subfolder identifier
-            keep_count: Number of dumps to keep for this variable
+            keep_count: Number of dumps to keep for this variable (oldest are removed first)
         """
         import shutil
 
@@ -535,26 +647,37 @@ class CodeSnap:
                     warnings.warn(f"Failed to remove old dump folder {old_folder}: {e}")
 
     def dump(self, obj: Any = None, name: str | None = None, step: int | None = None, update_metadata: bool = True, mode: str = 'last', max_keep: int = 1):
-        """
-        Dump an object to disk.
+        """Dump an object to disk with automatic serialization and organization.
 
         Each dump is saved in a separate subfolder to organize data by step/iteration.
+        Automatically detects object type and uses appropriate serializer (.pt, .npy, .pkl).
 
         In distributed training:
-        - All ranks can dump data
-        - File names will include rank information (e.g., "loss_rank0.pt")
-        - Only rank 0 updates metadata
+        - All ranks can dump data independently
+        - File names include rank information (e.g., "loss_rank0.pt")
+        - Only rank 0 updates metadata to avoid conflicts
 
         Args:
-            obj: Object to dump (torch.Tensor, numpy.ndarray, or any Python object)
-            name: Optional name for the dump file and subfolder. If not provided, will try to
-                  auto-detect the variable name from the calling code.
-            step: Optional step/iteration number. If provided, data will be saved in "step_{step:06d}/" subfolder.
-                  If not provided, uses the variable name or internal counter.
-            update_metadata: Whether to check and update metadata if changed (default: True)
-            mode: Dump mode - 'all' (keep all dumps), 'last' (keep only the latest),
-                  or 'last_n' (keep the latest n dumps). Default: 'last'
-            max_keep: For 'last_n' mode, the number of dumps to keep. Default: 1
+            obj: Object to dump (torch.Tensor, numpy.ndarray, or any Python object).
+                If None, nothing is saved.
+            name: Optional name for the dump file and subfolder. If not provided,
+                attempts to auto-detect the variable name from the calling code.
+            step: Optional step/iteration number. If provided, data is saved in
+                "step_{step:06d}/" subfolder. Allows multiple variables per step.
+                If not provided, uses variable name or internal counter.
+            update_metadata: Whether to check and update metadata if changed (default: True).
+                Set to False to skip metadata checks for performance in tight loops.
+            mode: Dump mode controlling how many dumps to keep:
+                - 'all': Keep all dumps (no cleanup)
+                - 'last': Keep only the latest dump (removes all previous)
+                - 'last_n': Keep the latest n dumps (controlled by max_keep)
+                Default: 'last'
+            max_keep: For 'last_n' mode, the number of dumps to keep (default: 1).
+                Ignored for 'all' and 'last' modes.
+
+        Raises:
+            RuntimeError: If called before init()
+            ValueError: If mode is not 'all', 'last', or 'last_n'
 
         Examples:
             # Auto-detect variable name
@@ -573,6 +696,10 @@ class CodeSnap:
             # Save accuracy, keep all dumps
             dumper.dump(accuracy, name="accuracy", step=100, mode='all')
             # -> saves to: folder/step_000100/accuracy_rank0.pt
+
+            # Skip metadata updates for performance in tight loops
+            for i in range(1000):
+                dumper.dump(intermediate, name="inter", update_metadata=False)
         """
         # Validate mode
         if mode not in ['all', 'last', 'last_n']:
@@ -671,25 +798,26 @@ class CodeSnap:
         serializer.save(obj, filepath)
 
     def _load_from_file(self, filepath):
-        """
-        Load an object from a file based on its extension.
+        """Load an object from a file based on its extension.
 
-        Uses the registry system to find the appropriate serializer.
+        Uses the registry system to find the appropriate serializer for the file type.
+        Automatically detects format from file extension and applies correct deserializer.
 
-        Supports:
-        - .pt: PyTorch tensors
-        - .npy: NumPy arrays
-        - .pkl: Pickle files
+        Supported formats:
+        - .pt: PyTorch tensors (requires torch)
+        - .npy: NumPy arrays (requires numpy)
+        - .pkl: Pickle files (any Python object)
 
         Args:
             filepath: Path to the file (string or Path object)
 
         Returns:
-            Loaded object
+            Loaded object (type depends on file format)
 
         Raises:
             ValueError: If file extension is not supported
             FileNotFoundError: If file doesn't exist
+            ImportError: If required package (torch/numpy) is not installed
         """
         from pathlib import Path
 
@@ -706,33 +834,45 @@ class CodeSnap:
         return serializer.load(filepath)
 
     def compare(self, a: Any, b: Any, atol: float = 1e-8, rtol: float = 1e-5, **kwargs) -> bool:
-        """
-        Compare two objects or files.
+        """Compare two objects or files for equality.
 
-        Supports:
+        Supports flexible comparison with automatic type conversion:
         - Direct object comparison (tensors, arrays, etc.)
         - File path comparison (.pt, .npy, .pkl files)
-        - Mixed: object vs file path
+        - Mixed comparison: object vs file path
+        - Cross-type comparison: PyTorch tensor vs NumPy array
+
+        Uses appropriate comparison methods based on object types:
+        - torch.allclose() for tensors
+        - numpy.allclose() for arrays
+        - Equality (==) for other types
 
         Args:
             a: First object or file path (str/Path)
             b: Second object or file path (str/Path)
-            atol: Absolute tolerance
-            rtol: Relative tolerance
-            **kwargs: Additional comparison parameters
+            atol: Absolute tolerance for numerical comparison (default: 1e-8)
+            rtol: Relative tolerance for numerical comparison (default: 1e-5)
+            **kwargs: Additional comparison parameters passed to the comparator
 
         Returns:
-            True if objects are equal within tolerance
+            bool: True if objects are equal within tolerance, False otherwise
 
         Examples:
             >>> # Compare objects directly
             >>> codesnap.compare(tensor1, tensor2)
+            True
 
             >>> # Compare files
             >>> codesnap.compare("output_rank0.pt", "output_rank1.pt")
+            False
 
             >>> # Compare file with object
             >>> codesnap.compare("saved.pt", my_tensor)
+            True
+
+            >>> # Cross-type comparison
+            >>> codesnap.compare(torch_tensor, numpy_array)
+            True
         """
         # Load from file if input is a string or Path
         if isinstance(a, (str, Path)):
@@ -749,7 +889,7 @@ class CodeSnap:
 # Global instance
 _dumper = CodeSnap()
 
-# Public API
+# Public API - expose methods from the global instance
 init = _dumper.init
 dump = _dumper.dump
 compare = _dumper.compare
