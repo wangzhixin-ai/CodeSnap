@@ -371,19 +371,27 @@ class CodeSnap:
 
                 # Extract git_diff to separate file
                 git_diff = git_info.get('git_diff')
+                untracked_diff = git_info.get('untracked_diff')
+
+                git_info_copy = git_info.copy()
+
                 if git_diff:
-                    # Normalize package name to lowercase to avoid duplicate files
+                    # Save tracked changes to .patch file
                     patch_filename = f"{normalized_pkg_name}.patch"
                     diff_path = uncommitted_changes_folder / patch_filename
                     with open(diff_path, 'w') as f:
                         f.write(git_diff)
-
-                    # Store git info without the diff content
-                    git_info_copy = git_info.copy()
                     git_info_copy['git_diff'] = f"See metadata/uncommitted_changes/{patch_filename}"
-                    git_data['local_packages_git_info'][normalized_pkg_name] = git_info_copy
-                else:
-                    git_data['local_packages_git_info'][normalized_pkg_name] = git_info
+
+                if untracked_diff:
+                    # Save untracked files to separate .untracked file
+                    untracked_filename = f"{normalized_pkg_name}.untracked"
+                    untracked_path = uncommitted_changes_folder / untracked_filename
+                    with open(untracked_path, 'w') as f:
+                        f.write(untracked_diff)
+                    git_info_copy['untracked_diff'] = f"See metadata/uncommitted_changes/{untracked_filename}"
+
+                git_data['local_packages_git_info'][normalized_pkg_name] = git_info_copy
 
         # First time initialization or force update
         if force or self.last_metadata is None:

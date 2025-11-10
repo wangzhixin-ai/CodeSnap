@@ -43,7 +43,7 @@ def get_git_info(package_path: Path, max_log_entries: int = 50) -> dict[str, Any
     - Current commit ID and branch
     - Repository status (clean/dirty)
     - Recent commit history with author and date
-    - Uncommitted changes (git diff)
+    - Uncommitted changes (tracked files + untracked files in package directory)
 
     Searches up to 5 parent directories to find .git folder if not in package_path.
 
@@ -57,28 +57,33 @@ def get_git_info(package_path: Path, max_log_entries: int = 50) -> dict[str, Any
             - branch: Current branch name
             - is_dirty: Whether there are uncommitted changes (bool)
             - git_log: List of recent commits with author, date, message
-            - git_diff: Diff of uncommitted changes
+            - git_diff: Combined diff of tracked changes and untracked files
             - log_entries_count: Number of log entries collected
         Returns None if not a git repository or on error.
     """
     try:
+        # Store the original package path to filter untracked files later
+        original_package_path = package_path
+
         # Check if it's a git repo
         git_dir = package_path / '.git'
+        git_root = package_path
         if not git_dir.exists():
             # Try parent directories
             current = package_path
             for _ in range(5):  # Check up to 5 levels up
                 current = current.parent
                 if (current / '.git').exists():
-                    package_path = current
+                    git_root = current
                     break
             else:
                 return None
+        else:
+            git_root = package_path
 
-        # Get current commit id
         commit_result = subprocess.run(
             ['git', 'rev-parse', 'HEAD'],
-            cwd=package_path,
+            cwd=git_root,
             capture_output=True,
             text=True,
             timeout=5
@@ -89,21 +94,42 @@ def get_git_info(package_path: Path, max_log_entries: int = 50) -> dict[str, Any
 
         commit_id = commit_result.stdout.strip()
 
-        # Get git status
+        # Get git status for the entire repository
         status_result = subprocess.run(
             ['git', 'status', '--porcelain'],
-            cwd=package_path,
+            cwd=git_root,
             capture_output=True,
             text=True,
             timeout=5
         )
 
-        is_dirty = bool(status_result.stdout.strip())
+        # Check if there are changes within the package directory
+        all_status_lines = status_result.stdout.strip().split('\n') if status_result.stdout.strip() else []
+
+        # Filter to only files within the original package path
+        package_has_changes = False
+        for line in all_status_lines:
+            if not line:
+                continue
+            # Extract filename from status line (format: "XY filename")
+            file_path = line[3:].strip()  # Skip status indicators
+            full_path = (git_root / file_path).resolve()
+
+            # Check if this file is within the package directory
+            try:
+                full_path.relative_to(original_package_path)
+                package_has_changes = True
+                break
+            except ValueError:
+                # File is outside package directory
+                continue
+
+        is_dirty = package_has_changes
 
         # Get git log (last N commits)
         log_result = subprocess.run(
             ['git', 'log', f'-{max_log_entries}', '--pretty=format:%H|%an|%ae|%ad|%s', '--date=iso'],
-            cwd=package_path,
+            cwd=git_root,
             capture_output=True,
             text=True,
             timeout=10
@@ -123,20 +149,142 @@ def get_git_info(package_path: Path, max_log_entries: int = 50) -> dict[str, Any
                     })
 
         # Get git diff (current changes)
-        diff_result = subprocess.run(
-            ['git', 'diff', 'HEAD'],
-            cwd=package_path,
+        # Capture changes within the package directory:
+        # 1. Tracked files (unstaged + staged changes)
+        # 2. Untracked files
+        # All combined into a single diff
+
+        git_diff_parts = []
+
+        # Helper function to check if a file is within the package directory
+        def is_in_package(file_path_str: str) -> bool:
+            """Check if a file path is within the original package directory."""
+            try:
+                full_path = (git_root / file_path_str).resolve()
+                full_path.relative_to(original_package_path)
+                return True
+            except ValueError:
+                return False
+
+        # 1. Get unstaged changes (modified tracked files not yet staged)
+        unstaged_result = subprocess.run(
+            ['git', 'diff'],
+            cwd=git_root,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if unstaged_result.returncode == 0 and unstaged_result.stdout.strip():
+            # Parse diff and only keep changes for files in the package directory
+            diff_lines = unstaged_result.stdout.split('\n')
+            current_file = None
+            file_diff_lines = []
+
+            for line in diff_lines:
+                if line.startswith('diff --git '):
+                    if current_file and is_in_package(current_file) and file_diff_lines:
+                        git_diff_parts.extend(file_diff_lines)
+
+                    parts = line.split(' ')
+                    if len(parts) >= 3:
+                        current_file = parts[2][2:]  # Remove "a/" prefix
+                    file_diff_lines = [line + '\n']
+                else:
+                    file_diff_lines.append(line + '\n')
+
+            if current_file and is_in_package(current_file) and file_diff_lines:
+                git_diff_parts.extend(file_diff_lines)
+
+        # 2. Get staged changes (files in staging area not yet committed)
+        staged_result = subprocess.run(
+            ['git', 'diff', '--cached'],
+            cwd=git_root,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if staged_result.returncode == 0 and staged_result.stdout.strip():
+            # Parse diff and only keep changes for files in the package directory
+            diff_lines = staged_result.stdout.split('\n')
+            current_file = None
+            file_diff_lines = []
+
+            for line in diff_lines:
+                if line.startswith('diff --git '):
+                    # Save previous file's diff if it was in package
+                    if current_file and is_in_package(current_file) and file_diff_lines:
+                        git_diff_parts.extend(file_diff_lines)
+
+                    # Start new file
+                    parts = line.split(' ')
+                    if len(parts) >= 3:
+                        current_file = parts[2][2:]  # Remove "a/" prefix
+                    file_diff_lines = [line + '\n']
+                else:
+                    file_diff_lines.append(line + '\n')
+
+            # Don't forget the last file
+            if current_file and is_in_package(current_file) and file_diff_lines:
+                git_diff_parts.extend(file_diff_lines)
+
+        # 3. Get untracked files within the package directory and create diff-like output
+        untracked_result = subprocess.run(
+            ['git', 'ls-files', '--others', '--exclude-standard'],
+            cwd=git_root,
             capture_output=True,
             text=True,
             timeout=10
         )
 
-        git_diff = diff_result.stdout if diff_result.returncode == 0 else ''
+        if untracked_result.returncode == 0 and untracked_result.stdout.strip():
+            untracked_files = untracked_result.stdout.strip().split('\n')
+            for untracked_file in untracked_files:
+                if not untracked_file:
+                    continue
+
+                # Only process files within the package directory
+                if not is_in_package(untracked_file):
+                    continue
+
+                file_path = git_root / untracked_file
+
+                # Skip if file doesn't exist or is a directory
+                if not file_path.exists() or file_path.is_dir():
+                    continue
+
+                # Skip binary files and very large files (>1MB)
+                try:
+                    if file_path.stat().st_size > 1_000_000:
+                        git_diff_parts.append(f"diff --git a/{untracked_file} b/{untracked_file}\n")
+                        git_diff_parts.append(f"new file (skipped: file too large, {file_path.stat().st_size} bytes)\n")
+                        continue
+
+                    # Try to read as text
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+
+                    # Create a diff-like format for new files
+                    git_diff_parts.append(f"diff --git a/{untracked_file} b/{untracked_file}\n")
+                    git_diff_parts.append(f"new file mode 100644\n")
+                    git_diff_parts.append(f"index 0000000..0000000\n")
+                    git_diff_parts.append(f"--- /dev/null\n")
+                    git_diff_parts.append(f"+++ b/{untracked_file}\n")
+
+                    # Add file content with '+' prefix (like git diff does for new files)
+                    for line in content.splitlines(keepends=True):
+                        git_diff_parts.append(f"+{line}" if line.endswith('\n') else f"+{line}\n")
+
+                except (UnicodeDecodeError, PermissionError, OSError):
+                    # Binary file or read error - just note it
+                    git_diff_parts.append(f"diff --git a/{untracked_file} b/{untracked_file}\n")
+                    git_diff_parts.append(f"new file (binary or unreadable)\n")
+
+        git_diff = ''.join(git_diff_parts)
 
         # Get current branch
         branch_result = subprocess.run(
             ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
-            cwd=package_path,
+            cwd=git_root,
             capture_output=True,
             text=True,
             timeout=5
