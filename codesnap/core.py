@@ -169,7 +169,7 @@ class CodeSnap:
 
             self._update_metadata()
 
-            print(f"[CodeSnap] Initialized. Output 1 : {self.folder}")
+            print(f"[CodeSnap] Initialized. Output: {self.folder}")
         else:
             self.counter = 0
 
@@ -284,18 +284,37 @@ class CodeSnap:
         local_tz = _get_local_timezone()
         if local_tz is not None:
             timestamp = datetime.now(local_tz).isoformat()
+            timezone_name = str(local_tz)
         else:
-            timestamp = datetime.now().isoformat()
+            # Use naive local time with explicit UTC offset
+            import time
+            # Get UTC offset in seconds
+            if time.daylight:
+                utc_offset_sec = -time.altzone
+            else:
+                utc_offset_sec = -time.timezone
+
+            # Convert to hours and minutes
+            offset_hours = utc_offset_sec // 3600
+            offset_minutes = (abs(utc_offset_sec) % 3600) // 60
+
+            # Format: +08:00 or -05:00
+            timezone_offset = f"{offset_hours:+03d}:{offset_minutes:02d}"
+
+            # Create timezone-aware timestamp
+            timestamp = datetime.now().isoformat() + timezone_offset
+            timezone_name = f"UTC{timezone_offset}"
 
         runtime_info = {
             'command': {
                 'executable': sys.executable,
                 'argv': sys.argv,
-                'full_command': ' '.join(sys.argv)
+                'full_command': f"{sys.executable} {' '.join(sys.argv)}"
             },
             'environment_variables': dict(os.environ),
             'working_directory': str(Path.cwd()),
-            'timestamp': timestamp
+            'timestamp': timestamp,
+            'timezone': timezone_name
         }
 
         runtime_path = metadata_folder / "runtime_info.json"
@@ -371,27 +390,19 @@ class CodeSnap:
 
                 # Extract git_diff to separate file
                 git_diff = git_info.get('git_diff')
-                untracked_diff = git_info.get('untracked_diff')
-
-                git_info_copy = git_info.copy()
-
                 if git_diff:
-                    # Save tracked changes to .patch file
+                    # Save to .patch file
                     patch_filename = f"{normalized_pkg_name}.patch"
                     diff_path = uncommitted_changes_folder / patch_filename
                     with open(diff_path, 'w') as f:
                         f.write(git_diff)
-                    git_info_copy['git_diff'] = f"See metadata/uncommitted_changes/{patch_filename}"
 
-                if untracked_diff:
-                    # Save untracked files to separate .untracked file
-                    untracked_filename = f"{normalized_pkg_name}.untracked"
-                    untracked_path = uncommitted_changes_folder / untracked_filename
-                    with open(untracked_path, 'w') as f:
-                        f.write(untracked_diff)
-                    git_info_copy['untracked_diff'] = f"See metadata/uncommitted_changes/{untracked_filename}"
-
-                git_data['local_packages_git_info'][normalized_pkg_name] = git_info_copy
+                    # Store git info with relative path to patch file
+                    git_info_copy = git_info.copy()
+                    git_info_copy['git_diff'] = f"metadata/uncommitted_changes/{patch_filename}"
+                    git_data['local_packages_git_info'][normalized_pkg_name] = git_info_copy
+                else:
+                    git_data['local_packages_git_info'][normalized_pkg_name] = git_info
 
         # First time initialization or force update
         if force or self.last_metadata is None:
@@ -688,7 +699,7 @@ class CodeSnap:
             ValueError: If mode is not 'all', 'last', or 'last_n'
 
         Examples:
-            # Auto-detect variable name
+            # Auto-detect variable name, keep only latest (default mode='last')
             ts1 = torch.tensor([1, 2, 3])
             dumper.dump(ts1)
             # -> saves to: folder/ts1/ts1_rank0.pt
@@ -697,13 +708,17 @@ class CodeSnap:
             dumper.dump(loss, name="loss", step=100, mode='last')
             # -> saves to: folder/step_000100/loss_rank0.pt
 
-            # Save gradient, keep the latest 5
-            dumper.dump(grad, name="gradient", step=100, mode='last_n', max_keep=5)
-            # -> saves to: folder/step_000100/gradient_rank0.pt
+            # Save gradient, keep all dumps (creates variable-specific folder)
+            dumper.dump(grad, name="gradient", mode='all')
+            # -> saves to: folder/gradient/dump_0000/gradient_rank0.pt
+            #              folder/gradient/dump_0001/gradient_rank0.pt
+            #              folder/gradient/dump_0002/gradient_rank0.pt
 
-            # Save accuracy, keep all dumps
-            dumper.dump(accuracy, name="accuracy", step=100, mode='all')
-            # -> saves to: folder/step_000100/accuracy_rank0.pt
+            # Save accuracy, keep the latest 5 (creates variable-specific folder)
+            dumper.dump(accuracy, name="accuracy", mode='last_n', max_keep=5)
+            # -> saves to: folder/accuracy/dump_0000/accuracy_rank0.pt
+            #              folder/accuracy/dump_0001/accuracy_rank0.pt
+            #              ... (keeps only latest 5)
 
             # Skip metadata updates for performance in tight loops
             for i in range(1000):
@@ -736,17 +751,17 @@ class CodeSnap:
             # Use user-provided step number
             subfolder_name = f"step_{step:06d}"
         else:
-            # When mode='all' or 'last_n' and no step is provided, use counter to create unique folders
+            # When mode='all' or 'last_n' and no step is provided
             if mode in ['all', 'last_n']:
-                # Initialize counter for this variable if not exists
+                # Create a variable-specific folder to organize all dumps for this variable
+                # Within this folder, use counter to create unique dump folders
                 if name not in self.var_counters:
                     self.var_counters[name] = 0
 
-                # Use variable name with counter
-                if name != "data":
-                    subfolder_name = f"{name}_{self.var_counters[name]:04d}"
-                else:
-                    subfolder_name = f"dump_{self.var_counters[name]:04d}"
+                # Use variable folder + counter subfolder
+                var_folder = name if name != "data" else "data"
+                dump_subfolder = f"dump_{self.var_counters[name]:04d}"
+                subfolder_name = f"{var_folder}/{dump_subfolder}"
 
                 # Increment counter for next dump
                 self.var_counters[name] += 1

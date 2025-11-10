@@ -119,21 +119,30 @@ experiments/
     ├── step_000200/                      # Next step
     │   ├── loss_rank0.pt
     │   └── ...
-    ├── loss_0000/                        # Variable-based dump with counter (mode='all' or 'last_n')
-    │   └── loss_rank0.pt
-    ├── loss_0001/                        # Next dump for the same variable
-    │   └── loss_rank0.pt
-    ├── gradient/                         # Fixed name dump (mode='last', default)
-    │   └── gradient_rank0.pt
-    └── dump_0000/                        # Auto-increment when variable name not detected
-        └── data_rank0.pt
+    ├── gradient/                         # Variable-specific folder (mode='all' or 'last_n')
+    │   ├── dump_0000/                    # Each dump gets its own subfolder
+    │   │   └── gradient_rank0.pt
+    │   ├── dump_0001/                    # Next dump for gradient
+    │   │   └── gradient_rank0.pt
+    │   └── dump_0002/
+    │       └── gradient_rank0.pt
+    ├── loss/                             # Another variable-specific folder
+    │   ├── dump_0000/
+    │   │   └── loss_rank0.pt
+    │   └── dump_0001/
+    │       └── loss_rank0.pt
+    ├── attention/                        # Fixed name dump (mode='last', default)
+    │   └── attention_rank0.pt            # Single file, always overwritten
+    └── data/                             # Auto-increment when variable name not detected
+        └── dump_0000/
+            └── data_rank0.pt
 ```
 
 **Directory naming:**
 - `step_{step:06d}/`: When you provide a `step` parameter to `dump()`
-- `{name}_{counter:04d}/`: When `mode='all'` or `mode='last_n'` without step parameter
-- `{name}/`: When `mode='last'` (default) without step parameter - always overwrites
-- `dump_{counter:04d}/`: When variable name cannot be detected
+- `{name}/dump_{counter:04d}/`: When `mode='all'` or `mode='last_n'` without step parameter (variable-specific folders with numbered subfolders)
+- `{name}/`: When `mode='last'` (default) without step parameter - always overwrites the same file
+- `data/dump_{counter:04d}/`: When variable name cannot be detected
 - Files include rank suffix in distributed mode: `{name}_rank{N}.{ext}`
 
 
@@ -180,13 +189,22 @@ Dump an object to disk.
 loss = torch.tensor(0.5)
 codesnap.dump(loss)  # Saves to: {timestamp}/loss/loss_rank0.pt
 
-# Keep all dumps with counter
-codesnap.dump(loss, mode='all')  # Saves to: {timestamp}/loss_0000/, loss_0001/, ...
+# Keep all dumps with variable-specific folders
+gradient = torch.randn(10)
+codesnap.dump(gradient, mode='all')
+# Saves to: {timestamp}/gradient/dump_0000/gradient_rank0.pt
+#           {timestamp}/gradient/dump_0001/gradient_rank0.pt
+#           {timestamp}/gradient/dump_0002/gradient_rank0.pt
+# Creates a variable-specific folder "gradient/" with numbered subfolders
 
-# Keep latest 5 dumps
-codesnap.dump(gradient, mode='last_n', max_keep=5)
+# Keep latest 5 dumps with variable-specific folders
+accuracy = torch.tensor(0.95)
+codesnap.dump(accuracy, mode='last_n', max_keep=5)
+# Saves to: {timestamp}/accuracy/dump_0000/accuracy_rank0.pt
+#           {timestamp}/accuracy/dump_0001/accuracy_rank0.pt
+#           ... (keeps only latest 5 dump_XXXX subfolders)
 
-# Step-based organization
+# Step-based organization (all modes use same step folder)
 codesnap.dump(loss, name="loss", step=100)  # Saves to: {timestamp}/step_000100/loss_rank0.pt
 ```
 

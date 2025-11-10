@@ -36,7 +36,7 @@ def get_package_version(package_name: str) -> str | None:
         return None
 
 
-def get_git_info(package_path: Path, max_log_entries: int = 50) -> dict[str, Any] | None:
+def get_git_info(package_path: Path, max_log_entries: int = 20) -> dict[str, Any] | None:
     """Get git information for a local package directory.
 
     Collects comprehensive git state including:
@@ -49,7 +49,7 @@ def get_git_info(package_path: Path, max_log_entries: int = 50) -> dict[str, Any
 
     Args:
         package_path: Path to the package directory to inspect
-        max_log_entries: Maximum number of git log entries to collect (default: 50)
+        max_log_entries: Maximum number of git log entries to collect (default: 20)
 
     Returns:
         dict | None: Git information dictionary with keys:
