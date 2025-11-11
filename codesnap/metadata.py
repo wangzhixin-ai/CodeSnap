@@ -466,8 +466,21 @@ def collect_metadata() -> dict[str, Any]:
             - local_packages: Dict mapping package names to detailed info dicts
                 Each local package info contains: name, version, location, git_info
     """
+    # Extract Python version and compiler info
+    # sys.version format: "3.10.0 (default, Mar  3 2022, 09:58:08) [GCC 7.5.0]"
+    version_parts = sys.version.split()
+    python_version = version_parts[0] if version_parts else sys.version
+
+    # Extract compiler info (everything inside square brackets)
+    compiler_info = None
+    if '[' in sys.version and ']' in sys.version:
+        start = sys.version.index('[')
+        end = sys.version.index(']')
+        compiler_info = sys.version[start+1:end]
+
     metadata = {
-        'python_version': sys.version,
+        'python_version': python_version,
+        'compiler': compiler_info,
         'platform': sys.platform,
         'all_packages': {},
         'local_packages': {}

@@ -361,6 +361,7 @@ class CodeSnap:
         # Split metadata into packages and git_info
         packages_data = {
             'python_version': current_metadata.get('python_version'),
+            'compiler': current_metadata.get('compiler'),
             'platform': current_metadata.get('platform'),
             'installed_packages': current_metadata.get('all_packages', {}),
             'local_packages': {}
@@ -412,6 +413,7 @@ class CodeSnap:
             # Check if packages data has changed
             last_packages = {
                 'python_version': self.last_metadata.get('python_version'),
+                'compiler': self.last_metadata.get('compiler'),
                 'platform': self.last_metadata.get('platform'),
                 'installed_packages': self.last_metadata.get('all_packages', {}),
                 'local_packages': {}
